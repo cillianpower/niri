@@ -1,5 +1,16 @@
 # AGENTS.md — niri fork
 
+## Latest upstream sync — 2026-09-17
+
+On `sync-focus-ring-anim`, existing uncommitted shadow-fade/scheduling work was preserved
+in `841a9844`, then `upstream/main` at `b735805d` was merged without conflicts in
+`62f8e0ac` (53 upstream commits). No compatibility fixes were needed.
+`cargo check --locked`, `cargo build --locked`, `cargo test --locked` (199 passed),
+and `cargo clippy --all-targets --locked` passed. Existing local config validation
+also passed. Built binary: `target/debug/niri`; nothing installed or restarted.
+Visual focus-ring/shadow behavior remains unverified after this sync (headless session).
+Older branch, installed-binary, and test-count references below describe prior work.
+
 Fork: `cillianpower/niri`, branch `focus-ring-anim` from tag `v26.04` (matches Fedora 44 `/usr/bin/niri`). Upstream: `niri-wm/niri`. Niri source checked out at `/home/user/Development/niri`.
 
 > **Materials system** is config-only and does not belong in this fork. Design docs and pipeline have moved to the dotfiles repo at `~/Development/dotfiles/docs/niri-materials/` (`README.md`, `materials-design.md`, `architecture.md`, `niri-reference.md`). Implementation is an external orchestration script that emits `~/.config/niri/materials.kdl` + `gsettings`/terminal fan-out — no niri source changes. See that location as the source of truth; do not add materials logic here unless explicitly asked to implement a fork extension (tint/per-output/per-window blur).

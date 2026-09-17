@@ -389,6 +389,16 @@ animations {
 
 ---
 
+## Upstream sync verification — 2026-09-17
+
+- Preserved existing uncommitted shadow-fade/scheduling work in `841a9844`.
+- Merged `upstream/main` at `b735805d` into `sync-focus-ring-anim` in `62f8e0ac`:
+  53 upstream commits, no conflicts or compatibility fixes.
+- Passed `cargo check --locked`, `cargo build --locked`, `cargo test --locked`
+  (199 tests), and `cargo clippy --all-targets --locked`.
+- Existing local config validation passed; nothing installed or restarted.
+- Visual animation behavior was not tested after merging (headless session).
+
 ## Appendix — Shadow extension (IMPLEMENTED)
 
 **Implemented on the synced fork branch.** The shadow now cross-fades with focus.
