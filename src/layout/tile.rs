@@ -97,7 +97,7 @@ pub struct Tile<W: LayoutElement> {
     pub(super) alpha_animation: Option<AlphaAnimation>,
 
     /// Animation of the focus ring alpha on focus change.
-    focus_ring_alpha_anim: Option<Animation>,
+    focus_progress_anim: Option<Animation>,
 
     /// Previous `is_active` state for detecting focus ring transitions.
     prev_focus_ring_is_active: bool,
@@ -223,7 +223,7 @@ impl<W: LayoutElement> Tile<W> {
             move_x_animation: None,
             move_y_animation: None,
             alpha_animation: None,
-            focus_ring_alpha_anim: None,
+            focus_progress_anim: None,
             prev_focus_ring_is_active: false,
             focus_ring_initialized: false,
             interactive_move_offset: Point::from((0., 0.)),
@@ -461,9 +461,9 @@ impl<W: LayoutElement> Tile<W> {
             }
         }
 
-        if let Some(anim) = &mut self.focus_ring_alpha_anim {
+        if let Some(anim) = &mut self.focus_progress_anim {
             if anim.is_done() {
-                self.focus_ring_alpha_anim = None;
+                self.focus_progress_anim = None;
             }
         }
     }
@@ -481,6 +481,7 @@ impl<W: LayoutElement> Tile<W> {
                 .alpha_animation
                 .as_ref()
                 .is_some_and(|alpha| !alpha.anim.is_done())
+            || self.focus_progress_anim.is_some()
     }
 
     pub fn is_moving_between_workspaces(&self) -> bool {
@@ -548,9 +549,55 @@ impl<W: LayoutElement> Tile<W> {
                 .geometry_corner_radius()
                 .scaled_by(1. - expanded_progress as f32)
         };
+
+        // Focus progress: 0 = inactive, 1 = active. This single animated value drives both
+        // the focus-ring alpha and the shadow cross-fade, so they fade in lockstep.
+        //
+        // When the animation is disabled (`off`) we skip all animation state and use the
+        // steady-state value directly, so the default-off path does no per-frame work.
+        let ring_max_opacity = (self.focus_ring.config().max_opacity / 100.).clamp(0., 1.);
+        let focus_ring_anim_off = self.options.animations.focus_ring.0.off;
+
+        let focus_progress = if focus_ring_anim_off {
+            if is_active {
+                1.
+            } else {
+                0.
+            }
+        } else {
+            if !self.focus_ring_initialized {
+                // First sight of this tile: record the current state without animating.
+                self.prev_focus_ring_is_active = is_active;
+                self.focus_ring_initialized = true;
+            } else if is_active != self.prev_focus_ring_is_active {
+                // Focus changed: start the fade from the current progress so interrupted
+                // transitions (rapid Alt+Tab) continue smoothly instead of jumping.
+                let target = if is_active { 1. } else { 0. };
+                let current = self
+                    .focus_progress_anim
+                    .as_ref()
+                    .map(|a| a.clamped_value())
+                    .unwrap_or(if is_active { 0. } else { 1. });
+                self.focus_progress_anim = Some(Animation::new(
+                    self.clock.clone(),
+                    current,
+                    target,
+                    0.,
+                    self.options.animations.focus_ring.0,
+                ));
+            }
+            self.prev_focus_ring_is_active = is_active;
+            self.focus_progress_anim
+                .as_ref()
+                .map(|a| a.clamped_value())
+                .unwrap_or(if is_active { 1. } else { 0. })
+        };
+
+        let ring_alpha = focus_progress as f32 * ring_max_opacity as f32;
+
         self.shadow.update_render_elements(
             animated_tile_size,
-            is_active,
+            focus_progress,
             radius,
             self.scale,
             1. - expanded_progress as f32,
@@ -560,48 +607,6 @@ impl<W: LayoutElement> Tile<W> {
             draw_border_with_background
         } else {
             false
-        };
-
-        // The focus ring fades between 0 and its configured max-opacity on focus change.
-        //
-        // When the animation is disabled (`off`) we skip all animation state and use the
-        // steady-state alpha directly, so the default-off path does no per-frame work.
-        let ring_max_opacity = (self.focus_ring.config().max_opacity / 100.).clamp(0., 1.);
-        let focus_ring_anim_off = self.options.animations.focus_ring.0.off;
-
-        if !focus_ring_anim_off {
-            if !self.focus_ring_initialized {
-                // First sight of this tile: record the current state without animating.
-                self.prev_focus_ring_is_active = is_active;
-                self.focus_ring_initialized = true;
-            } else if is_active != self.prev_focus_ring_is_active {
-                // Focus changed: start the fade from the current alpha so interrupted
-                // transitions (rapid Alt+Tab) continue smoothly instead of jumping.
-                let target = if is_active { ring_max_opacity } else { 0. };
-                let current = self
-                    .focus_ring_alpha_anim
-                    .as_ref()
-                    .map(|a| a.clamped_value())
-                    .unwrap_or(if is_active { 0. } else { ring_max_opacity });
-                self.focus_ring_alpha_anim = Some(Animation::new(
-                    self.clock.clone(),
-                    current,
-                    target,
-                    0.,
-                    self.options.animations.focus_ring.0,
-                ));
-            }
-            self.prev_focus_ring_is_active = is_active;
-        }
-
-        let ring_alpha = if focus_ring_anim_off {
-            // Animation off: steady-state alpha, no animation state.
-            if is_active { ring_max_opacity as f32 } else { 0. }
-        } else {
-            self.focus_ring_alpha_anim
-                .as_ref()
-                .map(|a| a.clamped_value() as f32)
-                .unwrap_or(if is_active { ring_max_opacity as f32 } else { 0. })
         };
 
         let radius = radius.expanded_by(self.focus_ring.width() as f32);

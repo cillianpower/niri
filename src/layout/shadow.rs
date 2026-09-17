@@ -35,7 +35,7 @@ impl Shadow {
     pub fn update_render_elements(
         &mut self,
         win_size: Size<f64, Logical>,
-        is_active: bool,
+        focus_progress: f64,
         radius: CornerRadius,
         scale: f64,
         alpha: f32,
@@ -73,13 +73,13 @@ impl Shadow {
 
         let shader_size = box_size + Size::from((width, width)).upscale(2.);
 
-        let color = if is_active {
-            self.config.color
-        } else {
-            // Default to slightly more transparent.
-            self.config
+        let color = {
+            // Cross-fade between the inactive and active shadow color based on focus progress.
+            let inactive = self
+                .config
                 .inactive_color
-                .unwrap_or(self.config.color * 0.75)
+                .unwrap_or(self.config.color * 0.75);
+            self.config.color.mix(&inactive, 1. - focus_progress as f32)
         };
 
         let shader_geo = Rectangle::new(Point::from((-width, -width)), shader_size);

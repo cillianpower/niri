@@ -60,6 +60,17 @@ impl Color {
         let [r, g, b, a] = [self.r, self.g, self.b, self.a];
         [r * a, g * a, b * a, a]
     }
+
+    /// Linearly interpolate between this color and `other` by `t` (0 = this, 1 = other).
+    pub fn mix(&self, other: &Self, t: f32) -> Self {
+        let t = t.clamp(0., 1.);
+        Self {
+            r: self.r + (other.r - self.r) * t,
+            g: self.g + (other.g - self.g) * t,
+            b: self.b + (other.b - self.b) * t,
+            a: self.a + (other.a - self.a) * t,
+        }
+    }
 }
 
 impl Mul<f32> for Color {

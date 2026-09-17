@@ -378,18 +378,44 @@ animations {
 - Composes with the maximize/fullscreen alpha automatically.
 - Known: animation is created at render time; a skipped frame can cause a rare
   1-frame jump. Follow-up: move creation to refresh()/advance_animations().
+- **FIXED (root cause):** the fade stuttered because `focus_ring_alpha_anim` was not
+  registered in `Tile::are_transitions_ongoing()`, so niri's render loop stopped
+  scheduling frames after the initial focus redraw. Added
+  `|| self.focus_progress_anim.is_some()` so the loop keeps redrawing each vblank while
+  the fade runs. This makes the fade deterministic and is the real fix for the
+  intermittent snap.
 
 ```
 
 ---
 
-## Appendix — Shadow extension (considered, OUT OF SCOPE)
+## Appendix — Shadow extension (IMPLEMENTED)
 
-Kept only as a reference for a possible future PR. **Not part of this submission.**
+**Implemented on the synced fork branch.** The shadow now cross-fades with focus.
 
-The shadow already threads `alpha: f32` to the shader but snaps between `color` and
-`inactive_color` on focus change (no fade). A faithful extension would crossfade the
-color (`Color::lerp` between `color` and `inactive_color.unwrap_or(color * 0.75)`) driven
-by a `ShadowAnim` config type mirroring `FocusRingAnim`, sharing a single `prev_is_active`
-flag. It would require adding a `Color::lerp` helper (none exists today). Deferred
-because the user wants exactly one feature accepted and nothing on by default.
+The shadow previously snapped between `color` and `inactive_color` on focus change (no
+fade). It now interpolates by the same animated focus-progress value that drives the
+focus ring, so both fade in lockstep.
+
+Design decisions:
+
+- Added `Color::mix(&self, other, t)` to `niri-config` (linear RGBA interpolation).
+- Changed `Shadow::update_render_elements` to take `focus_progress: f64` (0 = inactive,
+  1 = active) instead of `is_active: bool`, and interpolate
+  `color.mix(&inactive_color.unwrap_or(color * 0.75), 1 - focus_progress)`.
+- The animation is shared with the ring: one `focus_progress_anim` drives both the
+  ring alpha (`progress * max_opacity`) and the shadow cross-fade. This avoids a second
+  independent animation system and keeps both in sync under the scheduler fix.
+- Non-focus callers (`mapped.rs` layer surfaces, `workspace.rs` overview shadow) pass a
+  constant `1.` (always-active), preserving prior behavior.
+- Reused the existing `focus_ring` animation config block; the shadow does not get a
+  separate config key.
+
+```kdl
+animations {
+    focus-ring {
+        duration-ms 300
+        curve "ease-out-quad"
+    }
+}
+```

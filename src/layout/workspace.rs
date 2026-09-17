@@ -390,7 +390,7 @@ impl<W: LayoutElement> Workspace<W> {
         if layer.is_normal() {
             self.shadow.update_render_elements(
                 self.view_size,
-                true,
+                1.,
                 CornerRadius::default(),
                 self.scale.fractional_scale(),
                 1.,
