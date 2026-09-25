@@ -1,5 +1,26 @@
 # AGENTS.md — niri fork
 
+## Current sync and local deployment — 2026-09-25
+
+`sync-focus-ring-anim` merged the latest `upstream/main` at `1f03391e` in
+`5309f438`. This adds one upstream documentation commit after the earlier
+`e3c52255` sync; no source conflict or compatibility change was needed.
+`cargo test --workspace --locked` passed (207 niri and 19 config tests, plus
+wiki, IPC, and doc tests), as did clippy with `-D warnings` and a release build.
+
+A nested winit run used a throwaway copy of the desktop dotfiles config,
+including the live focus-ring, shadow, corner, and DMS layout settings. It
+validated, launched two Ghostty windows, and IPC focus changes showed the
+selected ring moving between them in screenshots. The nested output was one
+winit display; physical multi-monitor behavior remains unverified.
+
+The tested release binary (`v26.04-172-g5309f438`) was installed to
+`~/.local/bin/niri`, with the previous user binary backed up beside it. The
+desktop dotfiles now opt into the 300 ms fade and manage the niri service
+override. `/usr/bin/niri` remains the stock Fedora fallback. The compositor
+service was restarted, and IPC confirmed the new build and config load.
+The source checkout is `/home/user/Projects/niri`.
+
 ## Latest upstream sync — 2026-09-25
 
 `sync-focus-ring-anim` merged `upstream/main` at `e3c52255` (24 new commits) without conflicts.

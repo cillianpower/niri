@@ -1,5 +1,17 @@
 # Focus Ring Alpha Fade — Plan & Upstream PR Strategy
 
+## Deployment update — 2026-09-25
+
+The branch merged `upstream/main` at `1f03391e` in `5309f438`. The only new
+upstream commit documents tablet stylus button bindings. Workspace tests,
+clippy with warnings denied, and the release build passed. A nested winit
+run with a throwaway copy of the desktop config validated the actual ring,
+shadow, corner, and DMS layout settings with two Ghostty windows; focus
+switching changed the selected ring in screenshots. The dotfiles config now
+opts into the 300 ms EaseOutQuad transition. The release binary was installed
+at `~/.local/bin/niri`; the system package remains untouched. The compositor
+service was restarted, and IPC confirmed the new build and config load.
+
 ## Current fork state — 2026-09-25
 
 This fork branch contains both the optional focus-ring fade and shadow color fade.
