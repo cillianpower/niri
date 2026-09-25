@@ -33,6 +33,15 @@ Upstream's updated `CONTRIBUTING.md` asks for rebased, focused commits and its P
 template prohibits LLM-written PR code and descriptions. This fork work is for local
 evaluation; an upstream submission needs human authorship and review.
 
+## Handoff context — 2026-09-25
+
+- Working branch: <https://github.com/cillianpower/niri/tree/sync-focus-ring-anim>.
+- Existing Ideas thread by the fork author: [Animate focus ring alpha/colour on focus change](https://github.com/niri-wm/niri/discussions/4260). It has no replies as of this date. Continue there rather than opening a duplicate thread.
+- An [open PR for focus-ring fade and gradient rotation](https://github.com/niri-wm/niri/pull/3577) overlaps the ring part of this work. It has no formal reviews and was last updated in April 2026. Check its current status before anyone starts a new implementation. A separate [border color/gradient PR](https://github.com/niri-wm/niri/pull/3838) also exists.
+- The implementation here couples focus-ring alpha and shadow color under one opt-in animation setting. A prospective human contributor should first seek design feedback on whether upstream wants either effect, whether shadows belong in the same setting, and how this relates to the open PR.
+- The multi-output selection state has a passing layout regression test (`focus_ring_remains_selected_on_inactive_monitor`). It has not been visually checked on two physical outputs. The one-output nested compositor passed hands-on focus switching and captured fade-in/fade-out frames.
+- This is a fork work branch with merge history and other fork documentation. It is not a focused upstream PR branch. Under upstream's LLM policy, a human contributor would need to author any upstream code and public text themselves.
+
 ## Historical ring-only PR plan
 
 The earlier scope decision was one feature only: animate the ring alpha and leave
