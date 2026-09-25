@@ -2964,6 +2964,38 @@ fn add_and_remove_output() {
 }
 
 #[test]
+fn focus_ring_remains_selected_on_inactive_monitor() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::AddOutput(2),
+        Op::FocusOutput(2),
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+    ]);
+    layout.refresh(true);
+
+    let progress: Vec<_> = layout
+        .workspaces()
+        .flat_map(|(monitor, _, workspace)| {
+            workspace.tiles().map(move |tile| {
+                (
+                    monitor.unwrap().output_name().to_owned(),
+                    *tile.window().id(),
+                    tile.focus_progresses(),
+                )
+            })
+        })
+        .collect();
+
+    assert!(progress.contains(&(String::from("output1"), 1, (1., 0.))));
+    assert!(progress.contains(&(String::from("output2"), 2, (1., 1.))));
+}
+
+#[test]
 fn switch_ewaf_on() {
     let ops = [
         Op::AddOutput(1),

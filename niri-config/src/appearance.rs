@@ -341,7 +341,7 @@ impl MergeWith<BorderRule> for Border {
         merge!((self, part), width);
         merge!((self, part), max_opacity);
 
-        merge_color_gradient!(             
+        merge_color_gradient!(
             (self, part),
             (active_color, active_gradient),
             (inactive_color, inactive_gradient),

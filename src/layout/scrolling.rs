@@ -3671,7 +3671,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         self.interactive_resize = None;
     }
 
-    pub fn refresh(&mut self, is_active: bool, is_focused: bool) {
+    pub fn refresh(&mut self, is_active: bool, is_focused: bool, focus_ring: bool) {
         for (col_idx, col) in self.columns.iter_mut().enumerate() {
             let mut col_resize_data = None;
             if let Some(resize) = &self.interactive_resize {
@@ -3710,6 +3710,10 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             };
 
             for (tile_idx, tile) in col.tiles.iter_mut().enumerate() {
+                let is_selected = focus_ring
+                    && self.active_column_idx == col_idx
+                    && col.active_tile_idx == tile_idx;
+                tile.update_focus(is_selected, is_active && is_selected);
                 let win = tile.window_mut();
 
                 let active_in_column = col.active_tile_idx == tile_idx;

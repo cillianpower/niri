@@ -35,6 +35,102 @@ use crate::utils::{
     baba_is_float_offset, round_logical_in_physical, round_logical_in_physical_max1,
 };
 
+#[derive(Debug, Default)]
+struct FocusTransition {
+    target: Option<bool>,
+    animation: Option<Animation>,
+}
+
+impl FocusTransition {
+    fn set_target(&mut self, target: bool, clock: &Clock, config: niri_config::Animation) {
+        if config.off {
+            self.target = Some(target);
+            self.animation = None;
+            return;
+        }
+
+        if let Some(previous) = self.target {
+            if previous != target {
+                self.animation = Some(Animation::new(
+                    clock.clone(),
+                    self.value(),
+                    f64::from(target as u8),
+                    0.,
+                    config,
+                ));
+            }
+        }
+
+        // The first refresh establishes the state without a startup fade.
+        self.target = Some(target);
+    }
+
+    fn value(&self) -> f64 {
+        self.animation
+            .as_ref()
+            .map(Animation::clamped_value)
+            .unwrap_or(f64::from(self.target.unwrap_or(false) as u8))
+    }
+
+    fn advance(&mut self) {
+        if self.animation.as_ref().is_some_and(Animation::is_done) {
+            self.animation = None;
+        }
+    }
+
+    fn is_ongoing(&self) -> bool {
+        self.animation.is_some()
+    }
+
+    fn is_fading_out(&self) -> bool {
+        self.target == Some(false) && self.is_ongoing()
+    }
+}
+
+#[cfg(test)]
+mod focus_transition_tests {
+    use std::time::Duration;
+
+    use niri_config::animations::{Curve, EasingParams, Kind};
+
+    use super::*;
+
+    #[test]
+    fn starts_from_initial_state_and_reverses_without_a_jump() {
+        let mut clock = Clock::with_time(Duration::ZERO);
+        let config = niri_config::Animation {
+            off: false,
+            kind: Kind::Easing(EasingParams {
+                duration_ms: 1000,
+                curve: Curve::Linear,
+            }),
+        };
+        let mut transition = FocusTransition::default();
+
+        transition.set_target(true, &clock, config);
+        assert_eq!(transition.value(), 1.);
+        assert!(!transition.is_ongoing());
+
+        transition.set_target(false, &clock, config);
+        assert_eq!(transition.value(), 1.);
+        assert!(transition.is_fading_out());
+        clock.set_unadjusted(Duration::from_millis(400));
+        assert!((transition.value() - 0.6).abs() < 1e-6);
+
+        transition.set_target(true, &clock, config);
+        assert!((transition.value() - 0.6).abs() < 1e-6);
+        assert!(!transition.is_fading_out());
+        clock.set_unadjusted(Duration::from_millis(1400));
+        transition.advance();
+        assert!(!transition.is_ongoing());
+        assert_eq!(transition.value(), 1.);
+
+        transition.set_target(false, &clock, niri_config::Animation::new_off());
+        assert!(!transition.is_ongoing());
+        assert_eq!(transition.value(), 0.);
+    }
+}
+
 /// Toplevel window with decorations.
 #[derive(Debug)]
 pub struct Tile<W: LayoutElement> {
@@ -96,19 +192,14 @@ pub struct Tile<W: LayoutElement> {
     /// The animation of the tile's opacity.
     pub(super) alpha_animation: Option<AlphaAnimation>,
 
-    /// Animation of the focus ring alpha on focus change.
-    focus_progress_anim: Option<Animation>,
+    /// The ring follows selection, which remains visible on inactive monitors.
+    focus_ring_transition: FocusTransition,
 
-    /// Previous `is_active` state for detecting focus ring transitions.
-    prev_focus_ring_is_active: bool,
+    /// Keep the ring's previous color until its fade-out finishes.
+    focus_ring_fade_out_active_color: bool,
 
-    /// Whether the focus ring alpha animation has been initialized.
-    ///
-    /// Until the first `update_render_elements` call, we don't know the window's initial
-    /// `is_active`, so we set `prev_focus_ring_is_active` from it without animating. This
-    /// avoids a spurious fade-in from 0 on a window that was already focused at creation
-    /// (e.g. the first window you open).
-    focus_ring_initialized: bool,
+    /// The shadow follows activation, which changes when the active monitor changes.
+    shadow_transition: FocusTransition,
 
     /// Offset during the initial interactive move rubberband.
     pub(super) interactive_move_offset: Point<f64, Logical>,
@@ -223,9 +314,9 @@ impl<W: LayoutElement> Tile<W> {
             move_x_animation: None,
             move_y_animation: None,
             alpha_animation: None,
-            focus_progress_anim: None,
-            prev_focus_ring_is_active: false,
-            focus_ring_initialized: false,
+            focus_ring_transition: FocusTransition::default(),
+            focus_ring_fade_out_active_color: false,
+            shadow_transition: FocusTransition::default(),
             interactive_move_offset: Point::from((0., 0.)),
             unmap_snapshot: None,
             rounded_corner_damage: Default::default(),
@@ -461,11 +552,8 @@ impl<W: LayoutElement> Tile<W> {
             }
         }
 
-        if let Some(anim) = &mut self.focus_progress_anim {
-            if anim.is_done() {
-                self.focus_progress_anim = None;
-            }
-        }
+        self.focus_ring_transition.advance();
+        self.shadow_transition.advance();
     }
 
     pub fn are_animations_ongoing(&self) -> bool {
@@ -481,7 +569,38 @@ impl<W: LayoutElement> Tile<W> {
                 .alpha_animation
                 .as_ref()
                 .is_some_and(|alpha| !alpha.anim.is_done())
-            || self.focus_progress_anim.is_some()
+            || self.focus_ring_transition.is_ongoing()
+            || self.shadow_transition.is_ongoing()
+    }
+
+    pub fn update_focus(&mut self, is_selected: bool, is_active: bool) {
+        let config = self.options.animations.focus_ring.0;
+        if self.focus_ring_transition.target == Some(true) && !is_selected {
+            self.focus_ring_fade_out_active_color =
+                self.shadow_transition.target.unwrap_or(is_active);
+        }
+        let ring_config = if self.focus_ring.is_off() {
+            niri_config::Animation::new_off()
+        } else {
+            config
+        };
+        self.focus_ring_transition
+            .set_target(is_selected, &self.clock, ring_config);
+        let shadow_config = if self.shadow.is_on() {
+            config
+        } else {
+            niri_config::Animation::new_off()
+        };
+        self.shadow_transition
+            .set_target(is_active, &self.clock, shadow_config);
+    }
+
+    #[cfg(test)]
+    pub(super) fn focus_progresses(&self) -> (f64, f64) {
+        (
+            self.focus_ring_transition.value(),
+            self.shadow_transition.value(),
+        )
     }
 
     pub fn is_moving_between_workspaces(&self) -> bool {
@@ -550,54 +669,12 @@ impl<W: LayoutElement> Tile<W> {
                 .scaled_by(1. - expanded_progress as f32)
         };
 
-        // Focus progress: 0 = inactive, 1 = active. This single animated value drives both
-        // the focus-ring alpha and the shadow cross-fade, so they fade in lockstep.
-        //
-        // When the animation is disabled (`off`) we skip all animation state and use the
-        // steady-state value directly, so the default-off path does no per-frame work.
         let ring_max_opacity = (self.focus_ring.config().max_opacity / 100.).clamp(0., 1.);
-        let focus_ring_anim_off = self.options.animations.focus_ring.0.off;
-
-        let focus_progress = if focus_ring_anim_off {
-            if is_active {
-                1.
-            } else {
-                0.
-            }
-        } else {
-            if !self.focus_ring_initialized {
-                // First sight of this tile: record the current state without animating.
-                self.prev_focus_ring_is_active = is_active;
-                self.focus_ring_initialized = true;
-            } else if is_active != self.prev_focus_ring_is_active {
-                // Focus changed: start the fade from the current progress so interrupted
-                // transitions (rapid Alt+Tab) continue smoothly instead of jumping.
-                let target = if is_active { 1. } else { 0. };
-                let current = self
-                    .focus_progress_anim
-                    .as_ref()
-                    .map(|a| a.clamped_value())
-                    .unwrap_or(if is_active { 0. } else { 1. });
-                self.focus_progress_anim = Some(Animation::new(
-                    self.clock.clone(),
-                    current,
-                    target,
-                    0.,
-                    self.options.animations.focus_ring.0,
-                ));
-            }
-            self.prev_focus_ring_is_active = is_active;
-            self.focus_progress_anim
-                .as_ref()
-                .map(|a| a.clamped_value())
-                .unwrap_or(if is_active { 1. } else { 0. })
-        };
-
-        let ring_alpha = focus_progress as f32 * ring_max_opacity as f32;
+        let ring_alpha = self.focus_ring_transition.value() as f32 * ring_max_opacity as f32;
 
         self.shadow.update_render_elements(
             animated_tile_size,
-            focus_progress,
+            self.shadow_transition.value(),
             radius,
             self.scale,
             1. - expanded_progress as f32,
@@ -610,9 +687,14 @@ impl<W: LayoutElement> Tile<W> {
         };
 
         let radius = radius.expanded_by(self.focus_ring.width() as f32);
+        let ring_is_active = if self.focus_ring_transition.is_fading_out() {
+            self.focus_ring_fade_out_active_color
+        } else {
+            is_active
+        };
         self.focus_ring.update_render_elements(
             animated_tile_size,
-            is_active,
+            ring_is_active,
             !draw_focus_ring_with_background,
             self.window.is_urgent(),
             view_rect,
@@ -1400,7 +1482,7 @@ impl<W: LayoutElement> Tile<W> {
         // being outside the monitor or obscured by a solid colored bar, but it is visible under
         // semitransparent bars in maximized state (which is a bit weird) and in the overview (also
         // a bit weird).
-        if focus_ring && expanded_progress < 1. {
+        if (focus_ring || self.focus_ring_transition.is_ongoing()) && expanded_progress < 1. {
             self.focus_ring
                 .render(ctx.renderer, location, &mut |elem| push(elem.into()));
         }

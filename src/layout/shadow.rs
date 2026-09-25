@@ -26,6 +26,10 @@ impl Shadow {
         self.config = config;
     }
 
+    pub fn is_on(&self) -> bool {
+        self.config.on
+    }
+
     pub fn update_shaders(&mut self) {
         for elem in &mut self.shaders {
             elem.damage_all();

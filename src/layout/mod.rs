@@ -4875,6 +4875,7 @@ impl<W: LayoutElement> Layout<W> {
         let mut ongoing_scrolling_dnd = self.dnd.is_some().then_some(true);
 
         if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
+            move_.tile.update_focus(true, true);
             let win = move_.tile.window_mut();
 
             win.set_active_in_column(true);
