@@ -305,8 +305,8 @@ animations {
     // slowdown 3.0
 
     // focus-ring {
-    //     duration-ms 150
-    //     curve "ease-out-expo"
+    //     duration-ms 300
+    //     curve "ease-out-quad"
     // }
 }
 

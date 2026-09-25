@@ -1,9 +1,43 @@
 # Focus Ring Alpha Fade — Plan & Upstream PR Strategy
 
-**Scope decision (locked):** One feature only — animate the focus ring's alpha on focus
-change. **Everything is OFF by default.** The shadow extension was considered and is
-explicitly **out of scope** for this PR (kept below as a reference note only). The only
-goal is to get this single, well-understood feature accepted upstream.
+## Current fork state — 2026-09-25
+
+This fork branch contains both the optional focus-ring fade and shadow color fade.
+Everything is off by default. It merged `upstream/main` at `e3c52255` (24 commits)
+without conflicts. The original ring-only PR plan below is historical; the current
+implementation and verification record here take precedence.
+
+`Layout::refresh()` now starts transitions, before rendering. The ring tracks selected
+windows, including on inactive monitors. The shadow tracks activation, so its inactive
+color remains correct when another monitor is active. These need separate transition
+state even though they share one opt-in animation config. A private `FocusTransition`
+helper captures the first state without a flash, reverses from its current value, and
+clears completed animations. Disabled ring or shadow effects do not schedule animations.
+`Tile::are_transitions_ongoing()` includes both transitions. The deselected ring remains
+in the render tree during its fade-out and holds its previous active/inactive color,
+avoiding a color snap at the start of the fade.
+
+`cargo test --workspace --locked` passed on the synced tree (207 niri tests, 19 config
+tests, wiki parsing, IPC, and a doc test), including a multi-monitor selection
+regression test. The new helper test covers startup, reversal, completion,
+and `off`. `cargo clippy --all-targets --locked`,
+`cargo build --locked`, and `cargo +nightly fmt --all --check` passed. The default
+config and `/tmp/niri-focus-shadow-test.kdl` validated. The nested winit compositor
+ran with two Ghostty windows. IPC focus switching and captures at several points
+showed the new ring fading in and the old ring fading out smoothly through a
+one-second linear transition. The throwaway config was restored to 300 ms
+EaseOutQuad for hands-on testing.
+Multi-monitor behavior has not been visually tested.
+
+Upstream's updated `CONTRIBUTING.md` asks for rebased, focused commits and its PR
+template prohibits LLM-written PR code and descriptions. This fork work is for local
+evaluation; an upstream submission needs human authorship and review.
+
+## Historical ring-only PR plan
+
+The earlier scope decision was one feature only: animate the ring alpha and leave
+shadow fading out of the proposed PR. The following sections record that proposal and
+the earlier render-time implementation; they are not a current description of the code.
 
 It builds on the already-implemented focus-ring alpha fade (branch `focus-ring-anim`).
 

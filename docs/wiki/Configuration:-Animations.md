@@ -62,6 +62,12 @@ animations {
     recent-windows-close {
         spring damping-ratio=1.0 stiffness=800 epsilon=0.001
     }
+
+    // Opt in to fading the focus ring and window shadow when focus changes.
+    // focus-ring {
+    //     duration-ms 300
+    //     curve "ease-out-quad"
+    // }
 }
 ```
 
@@ -439,6 +445,27 @@ animations {
     }
 }
 ```
+
+#### `focus-ring`
+
+<sup>Since: next release</sup>
+
+Fades the focus ring when the selected window changes. A ring fading out keeps its
+previous color until transparent. On an inactive monitor, the selected window keeps
+its ring in the configured inactive color. If window shadows are enabled, their
+active and inactive colors fade when activation changes. This animation is off by
+default.
+
+```kdl
+animations {
+    focus-ring {
+        duration-ms 300
+        curve "ease-out-quad"
+    }
+}
+```
+
+Use `focus-ring { off }` to turn it off again.
 
 ### Specifying `custom-shader` by Path
 
