@@ -36,6 +36,8 @@ pub struct Options {
     pub xray: bool,
     pub noise: Option<f64>,
     pub saturation: Option<f64>,
+    pub brightness: Option<f64>,
+    pub contrast: Option<f64>,
 }
 
 impl Options {
@@ -44,6 +46,8 @@ impl Options {
             || self.blur
             || self.noise.is_some_and(|x| x > 0.)
             || self.saturation.is_some_and(|x| x != 1.)
+            || self.brightness.is_some_and(|x| x != 1.)
+            || self.contrast.is_some_and(|x| x != 1.)
     }
 }
 
@@ -126,6 +130,8 @@ impl BackgroundEffect {
             xray: effect.xray == Some(true),
             noise: effect.noise,
             saturation: effect.saturation,
+            brightness: effect.brightness,
+            contrast: effect.contrast,
         };
 
         // If we have some background effect but xray wasn't explicitly set, default it to true
@@ -179,6 +185,13 @@ impl BackgroundEffect {
             1.
         };
         let saturation = self.options.saturation.unwrap_or(saturation) as f32;
+        let (brightness, contrast) = if blur {
+            (self.blur_config.brightness, self.blur_config.contrast)
+        } else {
+            (1., 1.)
+        };
+        let brightness = self.options.brightness.unwrap_or(brightness) as f32;
+        let contrast = self.options.contrast.unwrap_or(contrast) as f32;
 
         if self.options.xray {
             let Some(xray) = ctx.xray else {
@@ -193,13 +206,15 @@ impl BackgroundEffect {
                 blur,
                 noise,
                 saturation,
+                brightness,
+                contrast,
                 &mut |elem| push(elem.into()),
             );
         } else {
             // Render non-xray effect.
             let elem = self
                 .nonxray
-                .render(ns, params, blur_options, noise, saturation);
+                .render(ns, params, blur_options, noise, saturation, brightness, contrast);
             push(elem.into());
         }
     }

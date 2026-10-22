@@ -1691,6 +1691,8 @@ mod tests {
                 offset: 3.0,
                 noise: 0.02,
                 saturation: 1.5,
+                brightness: 1.0,
+                contrast: 1.0,
             },
             gestures: Gestures {
                 dnd_edge_view_scroll: DndEdgeViewScroll {
@@ -1936,6 +1938,8 @@ mod tests {
                         blur: None,
                         noise: None,
                         saturation: None,
+                        brightness: None,
+                        contrast: None,
                     },
                     popups: PopupsRule {
                         opacity: None,
@@ -1945,6 +1949,8 @@ mod tests {
                             blur: None,
                             noise: None,
                             saturation: None,
+                            brightness: None,
+                            contrast: None,
                         },
                     },
                 },
@@ -1987,6 +1993,8 @@ mod tests {
                         blur: None,
                         noise: None,
                         saturation: None,
+                        brightness: None,
+                        contrast: None,
                     },
                     popups: PopupsRule {
                         opacity: None,
@@ -1996,6 +2004,8 @@ mod tests {
                             blur: None,
                             noise: None,
                             saturation: None,
+                            brightness: None,
+                            contrast: None,
                         },
                     },
                 },

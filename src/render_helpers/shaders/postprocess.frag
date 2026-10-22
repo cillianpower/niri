@@ -1,5 +1,7 @@
 uniform float noise;
 uniform float saturation;
+uniform float brightness;
+uniform float contrast;
 uniform vec4 bg_color;
 
 // Sin-less white noise by David Hoskins (MIT License).
@@ -18,6 +20,19 @@ vec3 saturate(vec3 color, float sat) {
 vec4 postprocess(vec4 color) {
     if (saturation != 1.0) {
         color.rgb = saturate(color.rgb, saturation);
+    }
+
+    // Colour is premultiplied: contrast pivots on mid grey scaled by alpha.
+    if (contrast != 1.0) {
+        color.rgb = (color.rgb - 0.5 * color.a) * contrast + 0.5 * color.a;
+    }
+
+    if (brightness != 1.0) {
+        color.rgb *= brightness;
+    }
+
+    if (saturation != 1.0 || contrast != 1.0 || brightness != 1.0) {
+        color.rgb = clamp(color.rgb, 0.0, color.a);
     }
 
     if (noise > 0.0) {

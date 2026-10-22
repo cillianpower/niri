@@ -407,3 +407,27 @@ blur {
     saturation 1.5
 }
 ```
+
+#### `brightness`
+
+White point of the blurred background: a multiplier applied after saturation and contrast. Default `1`.
+
+Values below `1` pull highlights down; values above `1` brighten.
+
+```kdl
+blur {
+    brightness 0.88
+}
+```
+
+#### `contrast`
+
+Contrast of the blurred background around mid grey. Default `1`.
+
+Values below `1` flatten the image towards grey; values above `1` increase contrast.
+
+```kdl
+blur {
+    contrast 0.9
+}
+```

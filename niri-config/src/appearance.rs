@@ -1035,6 +1035,8 @@ pub struct Blur {
     pub offset: f64,
     pub noise: f64,
     pub saturation: f64,
+    pub brightness: f64,
+    pub contrast: f64,
 }
 
 impl Default for Blur {
@@ -1045,6 +1047,8 @@ impl Default for Blur {
             offset: 3.,
             noise: 0.02,
             saturation: 1.5,
+            brightness: 1.,
+            contrast: 1.,
         }
     }
 }
@@ -1063,6 +1067,10 @@ pub struct BlurPart {
     pub noise: Option<FloatOrInt<0, 1000>>,
     #[knuffel(child, unwrap(argument))]
     pub saturation: Option<FloatOrInt<0, 1000>>,
+    #[knuffel(child, unwrap(argument))]
+    pub brightness: Option<FloatOrInt<0, 1000>>,
+    #[knuffel(child, unwrap(argument))]
+    pub contrast: Option<FloatOrInt<0, 1000>>,
 }
 
 impl MergeWith<BlurPart> for Blur {
@@ -1073,7 +1081,7 @@ impl MergeWith<BlurPart> for Blur {
         }
 
         merge_clone!((self, part), passes);
-        merge!((self, part), offset, noise, saturation);
+        merge!((self, part), offset, noise, saturation, brightness, contrast);
     }
 }
 
@@ -1087,6 +1095,10 @@ pub struct BackgroundEffectRule {
     pub noise: Option<FloatOrInt<0, 1000>>,
     #[knuffel(child, unwrap(argument))]
     pub saturation: Option<FloatOrInt<0, 1000>>,
+    #[knuffel(child, unwrap(argument))]
+    pub brightness: Option<FloatOrInt<0, 1000>>,
+    #[knuffel(child, unwrap(argument))]
+    pub contrast: Option<FloatOrInt<0, 1000>>,
 }
 
 /// Resolved background effect rule.
@@ -1109,6 +1121,8 @@ pub struct BackgroundEffect {
 
     pub noise: Option<f64>,
     pub saturation: Option<f64>,
+    pub brightness: Option<f64>,
+    pub contrast: Option<f64>,
 }
 
 impl MergeWith<BackgroundEffectRule> for BackgroundEffect {
@@ -1121,6 +1135,14 @@ impl MergeWith<BackgroundEffectRule> for BackgroundEffect {
 
         if let Some(x) = part.saturation {
             self.saturation = Some(x.0);
+        }
+
+        if let Some(x) = part.brightness {
+            self.brightness = Some(x.0);
+        }
+
+        if let Some(x) = part.contrast {
+            self.contrast = Some(x.0);
         }
     }
 }

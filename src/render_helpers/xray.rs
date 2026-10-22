@@ -79,6 +79,8 @@ pub struct XrayElement {
     blur: bool,
     noise: f32,
     saturation: f32,
+    brightness: f32,
+    contrast: f32,
     bg_color: Color32F,
     program: Option<GlesTexProgram>,
 }
@@ -102,6 +104,8 @@ impl Xray {
         blur: bool,
         noise: f32,
         saturation: f32,
+        brightness: f32,
+        contrast: f32,
         push: &mut dyn FnMut(XrayElement),
     ) {
         let program = Shaders::get(ctx.renderer).postprocess_and_clip.clone();
@@ -200,6 +204,8 @@ impl Xray {
                     blur,
                     noise,
                     saturation,
+                    brightness,
+                    contrast,
                     bg_color: *bg_color,
                     program: program.clone(),
                 };
@@ -250,6 +256,8 @@ impl Xray {
                 blur,
                 noise,
                 saturation,
+                brightness,
+                contrast,
                 bg_color: self.backdrop_color,
                 program: program.clone(),
             };
@@ -259,7 +267,7 @@ impl Xray {
 }
 
 impl XrayElement {
-    fn compute_uniforms(&self) -> [Uniform<'static>; 7] {
+    fn compute_uniforms(&self) -> [Uniform<'static>; 9] {
         [
             Uniform::new("niri_scale", self.scale),
             Uniform::new("geo_size", <[f32; 2]>::from(self.clip_geo_size)),
@@ -267,6 +275,8 @@ impl XrayElement {
             mat3_uniform("input_to_geo", self.input_to_clip_geo),
             Uniform::new("noise", self.noise),
             Uniform::new("saturation", self.saturation),
+            Uniform::new("brightness", self.brightness),
+            Uniform::new("contrast", self.contrast),
             Uniform::new("bg_color", self.bg_color.components()),
         ]
     }

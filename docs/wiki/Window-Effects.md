@@ -3,7 +3,7 @@
 <sup>Since: 26.04</sup>
 
 You can apply background effects to windows and layer-shell surfaces.
-These include blur, xray, saturation, and noise.
+These include blur, xray, saturation, brightness, contrast, and noise.
 They can be enabled in the `background-effect {}` section of [window](./Configuration:-Window-Rules.md#background-effect) or [layer](./Configuration:-Layer-Rules.md#background-effect) rules.
 
 ![Screenshot with blur](./img/blur.png)

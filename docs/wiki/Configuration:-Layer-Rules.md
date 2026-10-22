@@ -238,6 +238,8 @@ Override the background effect options for this surface.
 - `blur`: set to `true` to enable blur behind this surface, or `false` to force-disable it.
 - `noise`: amount of pixel noise added to the background (helps with color banding from blur).
 - `saturation`: color saturation of the background (`0` is desaturated, `1` is normal, `2` is 200% saturation).
+- `brightness`: white point multiplier of the background (`1` is normal, below `1` darkens).
+- `contrast`: contrast of the background around mid grey (`1` is normal, below `1` flattens).
 
 See the [window effects page](./Window-Effects.md) for an overview of background effects.
 

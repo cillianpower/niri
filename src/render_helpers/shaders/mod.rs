@@ -118,6 +118,8 @@ impl Shaders {
                     UniformName::new("input_to_geo", UniformType::Matrix3x3),
                     UniformName::new("noise", UniformType::_1f),
                     UniformName::new("saturation", UniformType::_1f),
+                    UniformName::new("brightness", UniformType::_1f),
+                    UniformName::new("contrast", UniformType::_1f),
                     UniformName::new("bg_color", UniformType::_4f),
                 ],
             )
