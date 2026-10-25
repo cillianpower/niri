@@ -68,6 +68,11 @@ animations {
     //     duration-ms 300
     //     curve "ease-out-quad"
     // }
+
+    // Opt in to fading popups (menus, popovers) in as they open.
+    // popup-open {
+    //     spring damping-ratio=1.0 stiffness=1500 epsilon=0.0001
+    // }
 }
 ```
 
@@ -466,6 +471,24 @@ animations {
 ```
 
 Use `focus-ring { off }` to turn it off again.
+
+#### `popup-open`
+
+<sup>Since: next release</sup>
+
+Fades popups (menus, popovers, tooltips) in as they open, moving them a few pixels away from
+what they are anchored to: a menu below its button drops into place, a submenu to the side
+slides out sideways. Only the drawing moves; input goes to the popup's final position from
+the start. Popups close instantly, and input method popups are never animated. This animation
+is off by default.
+
+```kdl
+animations {
+    popup-open {
+        spring damping-ratio=1.0 stiffness=1500 epsilon=0.0001
+    }
+}
+```
 
 ### Specifying `custom-shader` by Path
 

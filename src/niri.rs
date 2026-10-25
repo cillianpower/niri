@@ -169,7 +169,7 @@ use crate::render_helpers::surface::push_elements_from_surface_tree;
 use crate::render_helpers::texture::TextureBuffer;
 use crate::render_helpers::xray::{Xray, XrayPos};
 use crate::render_helpers::{
-    encompassing_geo, render_to_dmabuf, render_to_encompassing_texture, render_to_shm,
+    encompassing_geo, popup_open, render_to_dmabuf, render_to_encompassing_texture, render_to_shm,
     render_to_texture, render_to_vec, shaders, RenderCtx, RenderTarget,
 };
 #[cfg(feature = "xdp-gnome-screencast")]
@@ -324,6 +324,8 @@ pub struct Niri {
     pub wlr_data_control_state: WlrDataControlState,
     pub ext_data_control_state: ExtDataControlState,
     pub popups: PopupManager,
+    /// Popup surfaces whose open animation is ongoing.
+    pub opening_popups: Vec<WlSurface>,
     pub popup_grab: Option<PopupGrabState>,
     pub presentation_state: PresentationState,
     pub security_context_state: SecurityContextState,
@@ -2701,6 +2703,7 @@ impl Niri {
             wlr_data_control_state,
             ext_data_control_state,
             popups: PopupManager::default(),
+            opening_popups: Vec::new(),
             popup_grab: None,
             suppressed_keys: HashSet::new(),
             suppressed_buttons: HashSet::new(),
@@ -4755,8 +4758,12 @@ impl Niri {
 
         let mut res = RenderResult::Skipped;
         if self.monitors_active {
+            self.opening_popups.retain(popup_open::advance);
+            let popups_opening = !self.opening_popups.is_empty();
+
             let state = self.output_state.get_mut(output).unwrap();
             state.unfinished_animations_remain = self.layout.are_animations_ongoing(Some(output));
+            state.unfinished_animations_remain |= popups_opening;
             state.unfinished_animations_remain |=
                 self.config_error_notification.are_animations_ongoing();
             state.unfinished_animations_remain |= self.exit_confirm_dialog.are_animations_ongoing();

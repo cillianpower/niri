@@ -25,6 +25,7 @@ pub struct Animations {
     pub overview_open_close: OverviewOpenCloseAnim,
     pub recent_windows_close: RecentWindowsCloseAnim,
     pub focus_ring: FocusRingAnim,
+    pub popup_open: PopupOpenAnim,
 }
 
 impl Default for Animations {
@@ -44,6 +45,7 @@ impl Default for Animations {
             overview_open_close: Default::default(),
             recent_windows_close: Default::default(),
             focus_ring: Default::default(),
+            popup_open: Default::default(),
         }
     }
 }
@@ -80,6 +82,8 @@ pub struct AnimationsPart {
     pub recent_windows_close: Option<RecentWindowsCloseAnim>,
     #[knuffel(child)]
     pub focus_ring: Option<FocusRingAnim>,
+    #[knuffel(child)]
+    pub popup_open: Option<PopupOpenAnim>,
 }
 
 impl MergeWith<AnimationsPart> for Animations {
@@ -107,6 +111,7 @@ impl MergeWith<AnimationsPart> for Animations {
             overview_open_close,
             recent_windows_close,
             focus_ring,
+            popup_open,
         );
     }
 }
@@ -609,6 +614,32 @@ impl Default for FocusRingAnim {
 }
 
 impl<S> knuffel::Decode<S> for FocusRingAnim
+where
+    S: knuffel::traits::ErrorSpan,
+{
+    fn decode_node(
+        node: &knuffel::ast::SpannedNode<S>,
+        ctx: &mut knuffel::decode::Context<S>,
+    ) -> Result<Self, DecodeError<S>> {
+        let default = Self::default().0;
+        Ok(Self(Animation::decode_node(node, ctx, default, |_, _| {
+            Ok(false)
+        })?))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PopupOpenAnim(pub Animation);
+
+impl Default for PopupOpenAnim {
+    fn default() -> Self {
+        // Off by default: popups appear instantly unless the user opts in
+        // via `animations { popup-open { ... } }`.
+        Self(Animation::new_off())
+    }
+}
+
+impl<S> knuffel::Decode<S> for PopupOpenAnim
 where
     S: knuffel::traits::ErrorSpan,
 {

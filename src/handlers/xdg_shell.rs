@@ -41,6 +41,7 @@ use crate::input::resize_grab::ResizeGrab;
 use crate::input::{AnyStartData, DOUBLE_CLICK_TIME};
 use crate::layout::ActivateWindow;
 use crate::niri::{CastTarget, PopupGrabState, State};
+use crate::render_helpers::popup_open;
 use crate::utils::transaction::Transaction;
 use crate::utils::{
     get_monotonic_time, output_matches_name, send_scale_transform, update_tiled_state, ResizeEdge,
@@ -60,6 +61,7 @@ impl XdgShellHandler for State {
     }
 
     fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
+        popup_open::reset(surface.wl_surface());
         let popup = PopupKind::Xdg(surface);
         self.unconstrain_popup(&popup);
 
@@ -1254,6 +1256,11 @@ impl State {
         self.niri.popups.commit(surface);
 
         if let Some(popup) = self.niri.popups.find_popup(surface) {
+            let config = self.niri.config.borrow().animations.popup_open.0;
+            if popup_open::on_commit(&popup, &self.niri.clock, config) {
+                self.niri.opening_popups.push(surface.clone());
+            }
+
             match popup {
                 PopupKind::Xdg(ref popup) => {
                     if !popup.is_initial_configure_sent() {

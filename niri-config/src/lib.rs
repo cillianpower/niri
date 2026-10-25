@@ -1684,6 +1684,17 @@ mod tests {
                         ),
                     },
                 ),
+                popup_open: PopupOpenAnim(
+                    Animation {
+                        off: true,
+                        kind: Easing(
+                            EasingParams {
+                                duration_ms: 0,
+                                curve: Linear,
+                            },
+                        ),
+                    },
+                ),
             },
             blur: Blur {
                 off: false,

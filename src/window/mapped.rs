@@ -38,7 +38,7 @@ use crate::render_helpers::surface::{
     push_elements_from_surface_tree, render_snapshot_from_surface_tree,
 };
 use crate::render_helpers::xray::XrayPos;
-use crate::render_helpers::{background_effect, BakedBuffer, RenderCtx, RenderTarget};
+use crate::render_helpers::{background_effect, popup_open, BakedBuffer, RenderCtx, RenderTarget};
 use crate::utils::id::IdCounter;
 use crate::utils::transaction::Transaction;
 use crate::utils::{
@@ -696,6 +696,10 @@ impl LayoutElement for Mapped {
             let alpha = alpha * popup_rules.opacity.unwrap_or(1.).clamp(0., 1.);
 
             let surface = popup.wl_surface();
+            let (open_alpha, open_offset) = popup_open::render_params(surface);
+            let alpha = alpha * open_alpha;
+            let location = location + open_offset;
+
             let popup_geo = popup.geometry();
             let surface_loc = location + (offset - popup.geometry().loc).to_f64();
 
