@@ -409,6 +409,23 @@ These will also remove client-side shadows if the window draws any.
 
 `inactive-color` lets you override the shadow color for inactive windows; by default, a more transparent `color` is used.
 
+<sup>Since: next release</sup> Set `draw-above-other-windows` to `true` to draw the shadows of tiled windows above all tiled windows, rather than each one under its own window.
+The active window is drawn on top of its neighbors, so normally only its shadow falls on them, and when focus moves, which shadow is on top changes from one frame to the next.
+With this setting, both shadows stay visible and fade between `color` and `inactive-color` along with the [`focus-ring` animation](./Configuration:-Animations.md#focus-ring).
+Combine it with a transparent `inactive-color` (for example `"#0000"`) so that only the focused window casts a shadow, otherwise inactive windows' shadows also fall on the active one.
+The shadow is still kept off its own window, popups and focus rings stay above shadows, and floating windows are not affected.
+It has no effect together with `draw-behind-window true`.
+
+```kdl
+layout {
+    shadow {
+        on
+        inactive-color "#0000"
+        draw-above-other-windows true
+    }
+}
+```
+
 Shadow drawing will follow the window corner radius set with the [`geometry-corner-radius` window rule](./Configuration:-Window-Rules.md#geometry-corner-radius).
 
 > [!NOTE]

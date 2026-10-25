@@ -30,6 +30,13 @@ impl Shadow {
         self.config.on
     }
 
+    /// Whether this shadow should be drawn above other windows rather than under its own window.
+    ///
+    /// Only shadows cut out under their own window can do this.
+    pub fn draws_above_other_windows(&self) -> bool {
+        self.config.on && self.config.draw_above_other_windows && !self.config.draw_behind_window
+    }
+
     pub fn update_shaders(&mut self) {
         for elem in &mut self.shaders {
             elem.damage_all();

@@ -4858,7 +4858,7 @@ impl<W: LayoutElement> Layout<W> {
 
         move_
             .tile
-            .render(ctx, pos_in_backdrop, xray_pos, true, &mut |elem| {
+            .render(ctx, pos_in_backdrop, xray_pos, true, false, &mut |elem| {
                 push(RescaleRenderElement::from_element(
                     elem,
                     pos_in_backdrop.to_physical_precise_round(scale),

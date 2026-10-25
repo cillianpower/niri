@@ -365,6 +365,8 @@ pub struct Shadow {
     pub softness: f64,
     pub spread: f64,
     pub draw_behind_window: bool,
+    /// Draw tiled window shadows above all tiled windows rather than each under its own window.
+    pub draw_above_other_windows: bool,
     pub color: Color,
     pub inactive_color: Option<Color>,
 }
@@ -380,6 +382,7 @@ impl Default for Shadow {
             softness: 30.,
             spread: 5.,
             draw_behind_window: false,
+            draw_above_other_windows: false,
             color: Color::from_rgba8_unpremul(0, 0, 0, 0x77),
             inactive_color: None,
         }
@@ -395,7 +398,13 @@ impl MergeWith<ShadowRule> for Shadow {
 
         merge!((self, part), softness, spread);
 
-        merge_clone!((self, part), offset, draw_behind_window, color);
+        merge_clone!(
+            (self, part),
+            offset,
+            draw_behind_window,
+            draw_above_other_windows,
+            color
+        );
 
         merge_clone_opt!((self, part), inactive_color);
     }
@@ -441,6 +450,7 @@ impl From<WorkspaceShadow> for Shadow {
             softness: value.softness,
             spread: value.spread,
             draw_behind_window: false,
+            draw_above_other_windows: false,
             color: value.color,
             inactive_color: None,
         }
@@ -680,6 +690,8 @@ pub struct ShadowRule {
     pub spread: Option<FloatOrInt<-1024, 1024>>,
     #[knuffel(child, unwrap(argument))]
     pub draw_behind_window: Option<bool>,
+    #[knuffel(child, unwrap(argument))]
+    pub draw_above_other_windows: Option<bool>,
     #[knuffel(child)]
     pub color: Option<Color>,
     #[knuffel(child)]

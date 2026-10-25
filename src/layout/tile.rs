@@ -1212,12 +1212,104 @@ impl<W: LayoutElement> Tile<W> {
         Point::from((0., y))
     }
 
+    fn window_alpha(&self) -> f32 {
+        if self.window.is_ignoring_opacity_window_rule() {
+            1.
+        } else {
+            let alpha = self.window.rules().opacity.unwrap_or(1.).clamp(0., 1.);
+
+            // Interpolate towards alpha = 1. at fullscreen.
+            let p = self.fullscreen_progress() as f32;
+            alpha * (1. - p) + 1. * p
+        }
+    }
+
+    /// Whether the shadow and popups are left to the caller's own passes above all tiles.
+    ///
+    /// Tiles rendered through an offscreen (opening, alpha animation) keep theirs inside it.
+    fn renders_shadow_separately(&self) -> bool {
+        self.shadow.draws_above_other_windows()
+            && self.open_animation.is_none()
+            && self.alpha_animation.is_none()
+    }
+
+    /// Renders what goes above the shadow (popups, then focus ring and border) for the pass above
+    /// all tiles, if this tile uses it.
+    pub fn render_above_shadow_separately<R: NiriRenderer>(
+        &self,
+        mut ctx: RenderCtx<R>,
+        location: Point<f64, Logical>,
+        xray_pos: XrayPos,
+        focus_ring: bool,
+        push: &mut dyn FnMut(TileRenderElement<R>),
+    ) {
+        if !self.renders_shadow_separately() {
+            return;
+        }
+
+        let location = location + self.bob_offset();
+        let window_loc = self.window_loc();
+        self.window.render_popups(
+            ctx.r(),
+            location + window_loc,
+            Scale::from(self.scale),
+            self.window_alpha(),
+            xray_pos.offset(self.bob_offset() + window_loc),
+            &mut |elem| push(elem.into()),
+        );
+        self.render_border_and_focus_ring(ctx.renderer, location, focus_ring, push);
+    }
+
+    fn render_border_and_focus_ring<R: NiriRenderer>(
+        &self,
+        renderer: &mut R,
+        location: Point<f64, Logical>,
+        focus_ring: bool,
+        push: &mut dyn FnMut(TileRenderElement<R>),
+    ) {
+        if let Some(width) = self.visual_border_width() {
+            self.border.render(
+                renderer,
+                location + Point::from((width, width)),
+                &mut |elem| push(elem.into()),
+            );
+        }
+
+        // Hide the focus ring when maximized/fullscreened. It's not normally visible anyway due to
+        // being outside the monitor or obscured by a solid colored bar, but it is visible under
+        // semitransparent bars in maximized state (which is a bit weird) and in the overview (also
+        // a bit weird).
+        if (focus_ring || self.focus_ring_transition.is_ongoing()) && self.expanded_progress() < 1.
+        {
+            self.focus_ring
+                .render(renderer, location, &mut |elem| push(elem.into()));
+        }
+    }
+
+    /// Renders the shadow for the pass above all tiles, if this tile uses it.
+    pub fn render_shadow_separately<R: NiriRenderer>(
+        &self,
+        renderer: &mut R,
+        location: Point<f64, Logical>,
+        push: &mut dyn FnMut(TileRenderElement<R>),
+    ) {
+        if !self.renders_shadow_separately() || self.expanded_progress() >= 1. {
+            return;
+        }
+
+        self.shadow
+            .render(renderer, location + self.bob_offset(), &mut |elem| {
+                push(elem.into())
+            });
+    }
+
     fn render_inner<R: NiriRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         location: Point<f64, Logical>,
         mut xray_pos: XrayPos,
         focus_ring: bool,
+        separate_shadow: bool,
         push: &mut dyn FnMut(TileRenderElement<R>),
     ) {
         let _span = tracy_client::span!("Tile::render_inner");
@@ -1226,15 +1318,7 @@ impl<W: LayoutElement> Tile<W> {
         let fullscreen_progress = self.fullscreen_progress();
         let expanded_progress = self.expanded_progress();
 
-        let win_alpha = if self.window.is_ignoring_opacity_window_rule() {
-            1.
-        } else {
-            let alpha = self.window.rules().opacity.unwrap_or(1.).clamp(0., 1.);
-
-            // Interpolate towards alpha = 1. at fullscreen.
-            let p = fullscreen_progress as f32;
-            alpha * (1. - p) + 1. * p
-        };
+        let win_alpha = self.window_alpha();
 
         // This is here rather than in render_offset() because render_offset() is currently assumed
         // by the code to be temporary. So, for example, interactive move will try to "grab" the
@@ -1266,14 +1350,16 @@ impl<W: LayoutElement> Tile<W> {
             .scaled_by(1. - expanded_progress as f32);
 
         // Popups go on top, whether it's resize or not.
-        self.window.render_popups(
-            ctx.r(),
-            window_render_loc,
-            scale,
-            win_alpha,
-            xray_pos,
-            &mut |elem| push(elem.into()),
-        );
+        if !separate_shadow {
+            self.window.render_popups(
+                ctx.r(),
+                window_render_loc,
+                scale,
+                win_alpha,
+                xray_pos,
+                &mut |elem| push(elem.into()),
+            );
+        }
 
         // If we're resizing, try to render a shader, or a fallback.
         let mut pushed_resize = false;
@@ -1470,24 +1556,11 @@ impl<W: LayoutElement> Tile<W> {
             }
         }
 
-        if let Some(width) = self.visual_border_width() {
-            self.border.render(
-                ctx.renderer,
-                location + Point::from((width, width)),
-                &mut |elem| push(elem.into()),
-            );
+        if !separate_shadow {
+            self.render_border_and_focus_ring(ctx.renderer, location, focus_ring, push);
         }
 
-        // Hide the focus ring when maximized/fullscreened. It's not normally visible anyway due to
-        // being outside the monitor or obscured by a solid colored bar, but it is visible under
-        // semitransparent bars in maximized state (which is a bit weird) and in the overview (also
-        // a bit weird).
-        if (focus_ring || self.focus_ring_transition.is_ongoing()) && expanded_progress < 1. {
-            self.focus_ring
-                .render(ctx.renderer, location, &mut |elem| push(elem.into()));
-        }
-
-        if expanded_progress < 1. {
+        if expanded_progress < 1. && !separate_shadow {
             self.shadow
                 .render(ctx.renderer, location, &mut |elem| push(elem.into()));
         }
@@ -1505,12 +1578,18 @@ impl<W: LayoutElement> Tile<W> {
         );
     }
 
+    /// Renders the tile.
+    ///
+    /// With `separate_shadow`, a tile whose shadow draws above other windows leaves out its shadow
+    /// and what goes above it; the caller renders them with [`Self::render_shadow_separately()`]
+    /// and [`Self::render_above_shadow_separately()`].
     pub fn render<R: NiriRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         location: Point<f64, Logical>,
         xray_pos: XrayPos,
         focus_ring: bool,
+        separate_shadow: bool,
         push: &mut dyn FnMut(TileRenderElement<R>),
     ) {
         let _span = tracy_client::span!("Tile::render");
@@ -1533,6 +1612,7 @@ impl<W: LayoutElement> Tile<W> {
                 Point::new(0., 0.),
                 xray_pos,
                 focus_ring,
+                false,
                 &mut |elem| elements.push(elem),
             );
             match open.render(
@@ -1560,6 +1640,7 @@ impl<W: LayoutElement> Tile<W> {
                 Point::new(0., 0.),
                 xray_pos,
                 focus_ring,
+                false,
                 &mut |elem| elements.push(elem),
             );
             match alpha.offscreen.render(ctx.renderer, scale, &elements) {
@@ -1578,7 +1659,8 @@ impl<W: LayoutElement> Tile<W> {
         }
 
         if !pushed {
-            self.render_inner(ctx, location, xray_pos, focus_ring, &mut |elem| push(elem));
+            let separate_shadow = separate_shadow && self.renders_shadow_separately();
+            self.render_inner(ctx, location, xray_pos, focus_ring, separate_shadow, push);
         }
     }
 
@@ -1615,6 +1697,7 @@ impl<W: LayoutElement> Tile<W> {
             },
             Point::from((0., 0.)),
             xray_pos,
+            false,
             false,
             &mut |elem| contents.push(elem),
         );
@@ -1667,6 +1750,7 @@ impl<W: LayoutElement> Tile<W> {
                     Point::from((0., 0.)),
                     xray_pos,
                     false,
+                    false,
                     &mut |elem| contents.push(elem),
                 );
                 contents_with_blocked_out_bg = Some(contents);
@@ -1686,6 +1770,7 @@ impl<W: LayoutElement> Tile<W> {
             },
             Point::from((0., 0.)),
             xray_pos,
+            false,
             false,
             &mut |elem| blocked_out_contents.push(elem),
         );

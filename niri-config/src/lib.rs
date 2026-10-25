@@ -1391,6 +1391,7 @@ mod tests {
                     softness: 30.0,
                     spread: 5.0,
                     draw_behind_window: false,
+                    draw_above_other_windows: false,
                     color: Color {
                         r: 0.0,
                         g: 0.0,
@@ -1898,6 +1899,7 @@ mod tests {
                         softness: None,
                         spread: None,
                         draw_behind_window: None,
+                        draw_above_other_windows: None,
                         color: None,
                         inactive_color: None,
                     },
@@ -1993,6 +1995,7 @@ mod tests {
                         softness: None,
                         spread: None,
                         draw_behind_window: None,
+                        draw_above_other_windows: None,
                         color: None,
                         inactive_color: None,
                     },

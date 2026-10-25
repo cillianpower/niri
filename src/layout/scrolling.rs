@@ -2966,6 +2966,45 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             return;
         }
 
+        // Shadows that draw above other windows go in one pass above all tiles, so that a focus
+        // change, which reorders the tiles, cross-fades the shadows instead of flipping which one
+        // is on top. What goes above a tile's own shadow (popups, focus ring, border) goes in a
+        // pass above that. This matches the loop below.
+        for above_shadows in [true, false] {
+            let mut first = true;
+            for (col, col_pos) in self.columns_with_render_positions() {
+                if layer.is_normal() == col.is_moving_between_workspaces() {
+                    first = false;
+                    continue;
+                }
+
+                for (tile, tile_off, visible) in col.tiles_in_render_order() {
+                    let focus_ring = focus_ring && first;
+                    first = false;
+
+                    if !(visible || tile.alpha_animation.is_some()) {
+                        continue;
+                    }
+
+                    let tile_pos = col_pos + tile_off + tile.render_offset();
+                    let tile_pos = tile_pos.to_physical_precise_round(scale).to_logical(scale);
+                    let mut push = |elem: TileRenderElement<R>| push(elem.into());
+                    if above_shadows {
+                        let xray_pos = xray_pos.offset(tile_pos);
+                        tile.render_above_shadow_separately(
+                            ctx.r(),
+                            tile_pos,
+                            xray_pos,
+                            focus_ring,
+                            &mut push,
+                        );
+                    } else {
+                        tile.render_shadow_separately(ctx.renderer, tile_pos, &mut push);
+                    }
+                }
+            }
+        }
+
         let mut first = true;
 
         // This matches self.tiles_with_render_positions().
@@ -3005,7 +3044,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 }
 
                 let xray_pos = xray_pos.offset(tile_pos);
-                tile.render(ctx.r(), tile_pos, xray_pos, focus_ring, &mut |elem| {
+                tile.render(ctx.r(), tile_pos, xray_pos, focus_ring, true, &mut |elem| {
                     push(elem.into())
                 });
             }

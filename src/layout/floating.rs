@@ -1097,9 +1097,14 @@ impl<W: LayoutElement> FloatingSpace<W> {
             let focus_ring = focus_ring && Some(tile.window().id()) == active.as_ref();
 
             let xray_pos = xray_pos.offset(tile_pos);
-            tile.render(ctx.r(), tile_pos, xray_pos, focus_ring, &mut |elem| {
-                push(elem.into())
-            });
+            tile.render(
+                ctx.r(),
+                tile_pos,
+                xray_pos,
+                focus_ring,
+                false,
+                &mut |elem| push(elem.into()),
+            );
         }
     }
 
