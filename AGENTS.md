@@ -137,3 +137,40 @@ The wiki now documents the option with a `Since: next release` tag.
 - **Config parsing:** new `Animation` newtypes follow `knuffel::Decode` newtype pattern + `merge_clone!` triple wiring.
 - **Do not touch** `~/.config/niri/config.kdl` or live session unless asked; use `/tmp/*.kdl` + nested winit.
 - **Docs sync:** when changing this fork, update `FOCUS_RING_AND_SHADOW_ANIM_PLAN.md` + this file; materials docs live in `~/Development/dotfiles/docs/niri-materials/` — edit there, not here.
+
+## Agartha desktop glass fixes — 2026-10-04
+
+This separate combined build checkout uses the pinned overlay maintained in
+`~/Projects/dotfiles/hosts/desktop/niri/glass-overlay.patch`; the original niri
+and DMS forks are unchanged. Layer glass now requires a nonempty committed
+client blur region, so DMS closing/input surfaces cannot become geometry-shaped
+glass. KWin mode now honours existing adaptive dim/boost controls. Render-loop
+diagnostics use trace. Installed release passed 143 nested checks including GPU
+saturation/highlight and empty-layer-region regressions, and workspace tests
+(207 niri, 21 config, support/doc tests). Full report:
+`~/Projects/dotfiles/docs/niri-materials/tests/2026-10-04-glass-lifecycle.md`.
+
+The follow-up corner shader uses the clipping radius for KWin refraction and
+smooths the nearest-edge transition inside the bevel. GTK palette/backdrop
+fixes and the local 20 px clip-radius override remain in dotfiles. Verification
+report: `~/Projects/dotfiles/docs/niri-materials/tests/2026-10-04-corners-gtk.md`.
+
+The 2026-10-05 follow-up keeps the true 12 px clipping contour and eases
+KWin optical normals toward 24 px interior curvature over 12 px depth.
+Only interior refraction normals change; clip/highlight distance stays exact.
+Verification: `~/Projects/dotfiles/docs/niri-materials/tests/2026-10-05-interior-curvature.md`.
+
+DMS layer glass now derives optical corner radii from committed rounded
+blur-region scanlines when layer rules leave the radius unset. Separate optical
+uniforms leave coverage and explicit clip rules intact. Rectangular/disconnected
+regions keep square optics. Checks and deployment are recorded in
+`~/Projects/dotfiles/docs/niri-materials/tests/2026-10-05-dms-contours.md`.
+
+## Migration preflight — moves pending
+
+Moves remain pending. Read the [desktop migration audit](/home/user/Projects/DESKTOP-MIGRATION-AUDIT.md) before relocation; this section does not authorize moves or runtime changes.
+
+- This is a separate `git clone --shared` checkout, not a linked worktree. `.git/objects/info/alternates` names `/home/user/Projects/niri/.git/objects`, and `origin` names `/home/user/Projects/niri`. Moving either checkout requires coordinated repair and uninterrupted object access.
+- The audit found detached HEAD `24b1cd50`, modified glass sources/docs and untracked `src/render_helpers/liquid_glass.rs`. Preserve the complete dirty checkout; a clean clone plus the old overlay is not a substitute.
+- Dotfiles' `hosts/desktop/niri/prepare-glass-source.sh` defaults to this path and records the shared-clone/overlay provenance. Keep those references and experiment evidence with the family.
+- This experimental glass source is distinct from the current glass-free live fork. Historical deployment notes above do not authorize replacing the installed compositor or restarting the desktop.

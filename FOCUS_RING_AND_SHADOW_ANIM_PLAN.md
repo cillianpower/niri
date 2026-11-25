@@ -1,5 +1,13 @@
 # Focus Ring Alpha Fade — Plan & Upstream PR Strategy
 
+## Agartha glass follow-up — 2026-10-04
+
+The combined glass build now shares its KWin optical contour with window
+clipping and softens interior corner lens normals. The desktop override uses
+a 20 px corner radius and retains the 0.5 px focus ring. GTK foreground and
+inactive-surface fixes are configuration changes in dotfiles; see
+`~/Projects/dotfiles/docs/niri-materials/tests/2026-10-04-corners-gtk.md`.
+
 ## Deployment update — 2026-09-25
 
 The branch merged `upstream/main` at `1f03391e` in `5309f438`. The only new
@@ -484,3 +492,24 @@ animations {
     }
 }
 ```
+
+## Agartha interior corner curvature — 2026-10-05
+
+KWin glass retains the actual clip normal at the boundary and blends into a
+broader interior normal using smoothstep over 12 logical pixels. Interior
+radius is at least 24 logical pixels (bounded by surface size); square corners
+remain square. The desktop clip override returns to 12 px, with 0.5 px focus
+ring unchanged. This modifies backdrop optics only. Test/deployment report:
+`~/Projects/dotfiles/docs/niri-materials/tests/2026-10-05-interior-curvature.md`.
+
+## DMS client contour follow-up — 2026-10-05
+
+Layer buffers used a zero-radius bounding rectangle even when their committed
+blur region had rounded corners. Refraction now estimates the four corner radii
+from that region and passes them separately from clip coverage. This enables
+the existing broad interior normals for DMS surfaces without clipping their
+full-screen input buffers or changing their masks. Explicit layer corner rules
+still take precedence. Unit and nested GPU checks cover asymmetric/scaled masks,
+rectangular/disconnected fallback, foreground preservation and empty regions.
+The external bar setting uses Top rather than Overlay, allowing fullscreen apps
+to occlude it. Report: `~/Projects/dotfiles/docs/niri-materials/tests/2026-10-05-dms-contours.md`.

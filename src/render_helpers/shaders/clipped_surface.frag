@@ -26,30 +26,873 @@ uniform vec2 geo_size;
 uniform vec4 corner_radius;
 uniform mat3 input_to_geo;
 
+// Liquid glass uniforms
+uniform vec4 lg_corner_radius;
+uniform float lg_liquidity;
+uniform float lg_refraction_strength;
+uniform float lg_power_factor;
+uniform float lg_refraction_a;
+uniform float lg_refraction_b;
+uniform float lg_refraction_c;
+uniform float lg_refraction_d;
+uniform float lg_refraction_power;
+uniform float lg_glow_weight;
+uniform float lg_glow_bias;
+uniform float lg_glow_edge0;
+uniform float lg_glow_edge1;
+uniform float lg_edge_lighting;
+uniform float lg_fringing;
+// Refraction mode: >= 0.0 = Snell's Law optical refraction (matching kwin-effects-glass / dolphin.png)
+//                  < 0.0  = 2D gradient push
+uniform float lg_physical_refraction;
+// Dilute refraction
+uniform float lg_refraction_dilute;
+uniform float lg_dilute_strength;
+uniform float lg_dilute_fringing;
+// Glass tint and lens uniforms
+uniform float lg_lens_distortion;
+uniform float lg_brightness;
+uniform float lg_contrast;
+uniform float lg_saturation;
+uniform float lg_vibrancy;
+uniform float lg_adaptive_dim;
+uniform float lg_adaptive_boost;
+uniform float lg_edge_thickness;
+uniform float lg_padding_pixels;
+uniform float lg_mode;
+uniform float lg_bevel_intensity;
+uniform float lg_offset_strength;
+uniform float lg_oklab_saturation;
+
 float niri_rounding_alpha(vec2 coords, vec2 size, vec4 corner_radius);
 vec4 postprocess(vec4 color);
+vec2 refractionDir(vec2 uv);
+
+// ============================================================================
+// Liquid Glass effect -- Physically-based Snell's Law Refraction
+// Inspired by kwin-effects-glass (https://github.com/4v3ngR/kwin-effects-glass)
+// ============================================================================
+
+struct GlassFragment {
+    vec4 color;
+    float dist;
+    float edgeFactor;
+    float concaveFactor;
+    vec3 normal;
+    float ior;
+};
+
+// Rounded-rect Signed Distance Function (SDF)
+// corner_radius: x=top-left, y=top-right, z=bottom-right, w=bottom-left
+// p: relative to center in pixel coords.
+// Convention: p.y > 0 is TOP, p.y < 0 is BOTTOM, p.x < 0 is LEFT, p.x > 0 is RIGHT.
+float roundedRectangleDist(vec2 p, vec2 b, vec4 r)
+{
+    float radius = p.x > 0.0
+        ? (p.y > 0.0 ? r.y : r.z)   // Right: Top-Right (r.y), Bottom-Right (r.z)
+        : (p.y > 0.0 ? r.x : r.w);  // Left: Top-Left (r.x), Bottom-Left (r.w)
+    vec2 q = abs(p) - b + radius;
+    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - radius;
+}
+
+// Match the clip tangent at the boundary, then ease toward broader interior
+// curvature. Changing the optical contour at the boundary produces corner seams.
+vec2 roundedRectangleNormal(vec2 p, vec2 b, vec4 r, float dist, float width)
+{
+    float radius = p.x > 0.0
+        ? (p.y > 0.0 ? r.y : r.z)
+        : (p.y > 0.0 ? r.x : r.w);
+    vec2 q = abs(p) - b + radius;
+    vec2 outside = max(q, vec2(0.0));
+    vec2 exact = length(outside) > 0.001
+        ? normalize(outside)
+        : (q.x > q.y ? vec2(1.0, 0.0) : vec2(0.0, 1.0));
+    float soften = max(width * 0.2, niri_scale);
+    float interiorRadius = radius > 0.0
+        ? min(max(radius, 24.0 * niri_scale), min(b.x, b.y)) : radius;
+    vec2 interiorQ = abs(p) - b + interiorRadius;
+    vec2 soft = max(interiorQ, vec2(0.0))
+        + soften * log(vec2(1.0) + exp(-abs(interiorQ) / soften));
+    vec2 interior = length(soft) > 0.001 ? normalize(soft) : exact;
+    float transition = 12.0 * niri_scale;
+    vec2 normal = normalize(mix(exact, interior, smoothstep(0.0, transition, -dist)));
+    return normal * vec2(p.x < 0.0 ? -1.0 : 1.0, p.y < 0.0 ? -1.0 : 1.0);
+}
+
+// ----------------------------------------------------------------------------
+// Oklab Perceptual Color Space (Ported from kwin-effects-glass oklab.glsl)
+// ----------------------------------------------------------------------------
+vec3 srgbToLinear(vec3 c)
+{
+    return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));
+}
+
+vec3 linearToSrgb(vec3 c)
+{
+    return mix(c * 12.92, 1.055 * pow(max(c, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c));
+}
+
+vec3 linearToOklab(vec3 c)
+{
+    float l = 0.4122214708 * c.r + 0.5363325363 * c.g + 0.0514459929 * c.b;
+    float m = 0.2119034982 * c.r + 0.6806995451 * c.g + 0.1073969566 * c.b;
+    float s = 0.0883024619 * c.r + 0.2817188376 * c.g + 0.6299787005 * c.b;
+
+    float l_ = pow(max(l, 0.0), 1.0 / 3.0);
+    float m_ = pow(max(m, 0.0), 1.0 / 3.0);
+    float s_ = pow(max(s, 0.0), 1.0 / 3.0);
+
+    return vec3(
+        0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_,
+        1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_,
+        0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_
+    );
+}
+
+vec3 oklabToLinear(vec3 c)
+{
+    float l_ = c.r + 0.3963377774 * c.g + 0.2158037573 * c.b;
+    float m_ = c.r - 0.1055613458 * c.g - 0.0638541728 * c.b;
+    float s_ = c.r - 0.0894841775 * c.g - 1.2914855480 * c.b;
+
+    float l = l_ * l_ * l_;
+    float m = m_ * m_ * m_;
+    float s = s_ * s_ * s_;
+
+    return vec3(
+         4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+        -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+        -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s
+    );
+}
+
+vec3 oklabSaturate(vec3 srgb, float sat)
+{
+    if (abs(sat - 1.0) < 0.001) {
+        return srgb;
+    }
+    vec3 lab = linearToOklab(srgbToLinear(clamp(srgb, 0.0, 1.0)));
+    lab.gb *= sat;
+    return linearToSrgb(clamp(oklabToLinear(lab), 0.0, 1.0));
+}
+
+// ----------------------------------------------------------------------------
+// Authentic KWin Glass Effect (Ported from 4v3ngR/kwin-effects-glass)
+// ----------------------------------------------------------------------------
+vec4 kwinProcessSample(
+    vec2 baseUv,
+    vec3 glassNormal,
+    float ior,
+    float dispersion,
+    float magnitude,
+    vec2 uvScale,
+    vec2 lensShift,
+    vec2 uv_min,
+    vec2 uv_max
+) {
+    vec3 viewRay = vec3(0.0, 0.0, -1.0);
+
+    vec3 refractG = refract(viewRay, glassNormal, 1.0 / ior);
+    vec2 dir = length(refractG.xy) > 0.001 ? normalize(refractG.xy) : vec2(0.0);
+    vec2 shiftG = vec2(dir.x, -dir.y) * magnitude * uvScale + vec2(lensShift.x, -lensShift.y);
+    vec4 sampleG = texture2D(tex, clamp(baseUv + shiftG, uv_min, uv_max));
+
+    if (dispersion > 0.001) {
+        float fringe = clamp(dispersion, 0.0, 1.0) * 0.3;
+        vec2 shiftR = vec2(dir.x, -dir.y) * (magnitude * (1.0 + fringe)) * uvScale + vec2(lensShift.x, -lensShift.y);
+        vec2 shiftB = vec2(dir.x, -dir.y) * (magnitude * (1.0 - fringe)) * uvScale + vec2(lensShift.x, -lensShift.y);
+
+        float r = texture2D(tex, clamp(baseUv + shiftR, uv_min, uv_max)).r;
+        float b = texture2D(tex, clamp(baseUv + shiftB, uv_min, uv_max)).b;
+        return vec4(r, sampleG.g, b, sampleG.a);
+    }
+    return sampleG;
+}
+
+GlassFragment kwinSnellsRefraction(
+    vec2 uv_tex,
+    vec2 uv_min,
+    vec2 uv_max,
+    vec2 position,
+    vec2 halfBlurSize,
+    vec4 cornerRadius,
+    vec2 uvScale,
+    float minHalfSize,
+    float dist,
+    float edgeFactor,
+    float concaveFactor,
+    float refractionStrength,
+    float refractionBevelIntensity,
+    float refractionOffsetStrength,
+    float refractionRGBFringing
+) {
+    float bandWidth = clamp(minHalfSize * lg_edge_thickness, 0.1, min(minHalfSize * 0.9, 48.0 * niri_scale));
+
+    // In 4v3ngR/kwin-effects-glass settings.cpp, UI slider values are divided:
+    // refractionStrength = slider / 20.0, refractionBevelIntensity = slider / 10.0,
+    // refractionOffsetStrength = slider / 2.0.
+    // Support both slider values (e.g. 4.0, 10.0, 8.0) and normalized values:
+    float normStrength = refractionStrength > 1.0 ? refractionStrength * 0.05 : refractionStrength;
+    normStrength = clamp(normStrength, 0.0, 1.0);
+    float ior = 1.0 + normStrength;
+
+    float normBevel = refractionBevelIntensity > 2.0 ? refractionBevelIntensity * 0.1 : refractionBevelIntensity;
+    normBevel = clamp(normBevel, 0.1, 3.0);
+
+    float normOffset = refractionOffsetStrength > 2.0 ? refractionOffsetStrength * 0.5 : refractionOffsetStrength;
+    normOffset = clamp(normOffset, 0.0, 10.0);
+
+    vec2 surfaceNormal = roundedRectangleNormal(position, halfBlurSize, cornerRadius, dist, bandWidth);
+
+    float normalHeight = concaveFactor * normBevel;
+    vec2 normalXY = surfaceNormal * normalHeight;
+    vec3 glassNormal = normalize(vec3(normalXY, 1.0));
+
+    // Cap maximum shift to prevent sampling out-of-bounds or extreme pixelation
+    float maxShiftPx = max(minHalfSize * 0.40, 24.0 * niri_scale);
+    float lensMagnitude = min(concaveFactor * bandWidth * normBevel, maxShiftPx);
+
+    // Corner optical displacement
+    vec2 normalizedPos = position / (halfBlurSize * 2.0);
+    float cornerWeight = dot(normalizedPos, normalizedPos) * normOffset;
+    surfaceNormal += normalizedPos * concaveFactor * cornerWeight;
+
+    vec2 lensShift = -surfaceNormal * (lensMagnitude * 0.5) * uvScale;
+    float refractionMagnitude = min(lensMagnitude * normStrength, maxShiftPx);
+    vec4 color = kwinProcessSample(uv_tex, glassNormal, ior, refractionRGBFringing, refractionMagnitude, uvScale, lensShift, uv_min, uv_max);
+
+    return GlassFragment(color, dist, edgeFactor, concaveFactor, glassNormal, ior);
+}
+
+vec3 kwinGlassGlow(vec2 position, GlassFragment s, float glowStrength, float edgeLighting)
+{
+    float rimMask = clamp(0.25 * s.concaveFactor, 0.0, glowStrength);
+    vec3 glowColor = vec3(1.0);
+    vec3 glow = mix(s.color.rgb, glowColor, rimMask);
+    if (edgeLighting > 0.0) {
+        glow += (s.color.rgb * s.concaveFactor * edgeLighting * 0.5);
+    }
+    return clamp(glow, 0.0, 1.0);
+}
+
+vec3 kwinGlassOutline(vec2 position, vec2 blurSize, GlassFragment s, float glowStrength)
+{
+    vec3 glow = s.color.rgb;
+
+    if (glowStrength > 0.0) {
+        float edgeMask = smoothstep(0.0, -2.0 * niri_scale, s.dist);
+        float borderInner = smoothstep(-1.0 * niri_scale, -3.0 * niri_scale, s.dist);
+        float edgeProfile = max(edgeMask - borderInner, 0.0);
+        float thicknessShadow = pow(edgeProfile, 0.9);
+        float shadowMask = smoothstep(blurSize.y * 0.7, -blurSize.y * 0.7, position.y) *
+                           smoothstep(blurSize.x * 0.7, -blurSize.x * 0.7, position.x);
+        float highlightMask = smoothstep(-blurSize.y * 0.7, blurSize.y * 0.7, position.y) *
+                              smoothstep(-blurSize.x * 0.7, blurSize.x * 0.7, position.x);
+
+        glow = mix(glow, vec3(1.0), thicknessShadow * shadowMask * glowStrength);
+        glow = mix(glow, vec3(1.0), thicknessShadow * highlightMask * glowStrength);
+    }
+
+    return clamp(glow, 0.0, 1.0);
+}
+
+vec4 kwin_glass_effect(
+    vec2 uv_tex,
+    vec2 windowUV,
+    vec4 baseColor,
+    vec2 blurSize,
+    vec4 cornerRadius,
+    vec2 uvScale,
+    float refractionStrength,
+    float refractionNormalPow,
+    float refractionRGBFringing,
+    float refractionOffsetStrength,
+    float refractionBevelIntensity,
+    float glowStrength,
+    float edgeLighting
+) {
+    vec2 halfBlurSize = blurSize * 0.5;
+    float minHalfSize = min(halfBlurSize.x, halfBlurSize.y);
+
+    vec2 position = windowUV * blurSize - halfBlurSize.xy;
+    position.y = -position.y;
+    float dist = roundedRectangleDist(position, halfBlurSize, cornerRadius);
+
+    if (dist > 0.0) {
+        return baseColor;
+    }
+
+    vec2 uv_min = vec2(0.0);
+    vec2 uv_max = vec2(1.0);
+
+    float minEsp = clamp(minHalfSize * lg_edge_thickness, 0.1, min(minHalfSize * 0.9, 48.0 * niri_scale));
+    float edgeFactor = 1.0 - clamp(abs(dist) / minEsp, 0.0, 1.0);
+    float concaveFactor = 1.0 - sqrt(max(0.0, 1.0 - pow(smoothstep(0.0, 1.0, edgeFactor), refractionNormalPow)));
+
+    GlassFragment s;
+    if (refractionStrength > 0.0) {
+        s = kwinSnellsRefraction(
+            uv_tex, uv_min, uv_max, position, halfBlurSize, cornerRadius, uvScale,
+            minHalfSize, dist, edgeFactor, concaveFactor,
+            refractionStrength, refractionBevelIntensity, refractionOffsetStrength, refractionRGBFringing
+        );
+    } else {
+        s = GlassFragment(baseColor, dist, edgeFactor, concaveFactor, vec3(0.0, 0.0, 1.0), 1.0);
+    }
+
+    vec3 rgb = s.concaveFactor < 1.0 ? kwinGlassGlow(position, s, glowStrength, edgeLighting) : s.color.rgb;
+    s.color.rgb = rgb;
+    rgb = kwinGlassOutline(position, blurSize, s, glowStrength);
+
+    // Oklab saturation or standard saturation
+    if (lg_oklab_saturation > 0.5) {
+        rgb = oklabSaturate(rgb, lg_saturation);
+    } else if (abs(lg_saturation - 1.0) > 0.01) {
+        float lum = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+        rgb = clamp(mix(vec3(lum), rgb, lg_saturation), 0.0, 1.0);
+    }
+
+    if (abs(lg_brightness - 1.0) > 0.01) {
+        rgb *= lg_brightness;
+    }
+    // Suppress highlights without dimming every midtone, and lift shadows
+    // independently for light surfaces. These controls also apply in KWin mode.
+    float toneLum = dot(s.color.rgb, vec3(0.2126, 0.7152, 0.0722));
+    rgb *= 1.0 - clamp(lg_adaptive_dim, 0.0, 1.0) * smoothstep(0.3, 0.8, toneLum);
+    rgb += vec3(max(lg_adaptive_boost, 0.0) * (1.0 - smoothstep(0.0, 0.5, toneLum)) * 0.15);
+    if (abs(lg_contrast - 1.0) > 0.01) {
+        rgb = clamp(mix(vec3(0.5), rgb, lg_contrast), 0.0, 1.0);
+    }
+
+    return vec4(rgb, s.color.a);
+}
+
+// Snell's Law Optical Refraction -- Faithful port of kwin-effects-glass snells-glass.glsl
+// Models accurate light refraction through curved dielectric glass using refract()
+GlassFragment snellsRefraction(
+    vec2 uv_tex,
+    vec2 uv_min,
+    vec2 uv_max,
+    vec2 position,
+    vec2 halfSize,
+    vec4 cornerRadius,
+    vec2 uvScale,
+    float minHalfSize,
+    float dist,
+    float edgeFactor,
+    float concaveFactor,
+    float refractionStrength,
+    float refractionBevelIntensity,
+    float refractionOffsetStrength,
+    float refractionRGBFringing
+) {
+    float liq = clamp(lg_liquidity, 0.0, 3.0);
+
+    // 1. Optical curvature radius inflation for surface-tension water-drop bowing
+    float minInflate = min(64.0 * niri_scale, minHalfSize * 0.75);
+    float maxInflate = min(128.0 * niri_scale, minHalfSize * 0.95);
+    vec4 inflatedCorner = clamp(cornerRadius * 2.5 + vec4(minInflate), minInflate, maxInflate);
+    vec4 optCornerRadius = mix(cornerRadius, inflatedCorner, min(liq, 1.0));
+
+    // Liquidity-modulated meniscus band width: wider at high liquidity for thicker bevel
+    float bandWidthBase = max(minHalfSize * lg_edge_thickness, 8.0 * niri_scale);
+    float bandWidth = bandWidthBase * (1.0 + liq * 1.5);
+
+    // Liquidity-boosted IOR: deeper refraction at high liquidity
+    float iorBase = 1.0 + clamp(refractionStrength * 0.52, 0.05, 1.95);
+    float ior = iorBase + liq * 0.45;
+
+    // Dynamic finite difference epsilon based on optical curvature
+    float minR = max(min(min(optCornerRadius.x, optCornerRadius.y), min(optCornerRadius.z, optCornerRadius.w)), 2.0);
+    float eps = clamp(min(bandWidth * 0.4, minR * 0.5), 1.0, 6.0);
+    float dxp = roundedRectangleDist(position + vec2(eps, 0.0), halfSize, optCornerRadius);
+    float dxn = roundedRectangleDist(position - vec2(eps, 0.0), halfSize, optCornerRadius);
+    float dyp = roundedRectangleDist(position + vec2(0.0, eps), halfSize, optCornerRadius);
+    float dyn = roundedRectangleDist(position - vec2(0.0, eps), halfSize, optCornerRadius);
+
+    vec2 smoothGrad = vec2(dxp - dxn, dyp - dyn);
+    float gradLen = length(smoothGrad);
+
+    // Organic fluid curvature with liquidity-boosted body dome
+    float bodyDist = clamp(-dist / max(minHalfSize, 1.0), 0.0, 1.0);
+    // Liquidity scales the fluid dome: 0.18 at liq=0, up to 0.65 at liq=1
+    float fluidBodyScale = 0.18 + liq * 0.47;
+    float fluidBody = (1.0 - bodyDist * bodyDist) * fluidBodyScale * clamp(refractionStrength, 0.0, 1.5);
+    float totalLiquidFactor = clamp(concaveFactor + fluidBody * (1.0 - concaveFactor), 0.0, 1.0);
+
+    // Liquid surface gradient: combines boundary meniscus with gentle body surface tension
+    vec2 toCenter = -position / max(halfSize, vec2(1.0));
+    float centerDistSq = clamp(dot(toCenter, toCenter), 0.0, 1.0);
+    vec2 bodyGrad = toCenter * (1.0 - centerDistSq);
+
+    // Liquidity-boosted body gradient influence
+    float bodyGradScale = 0.4 + liq * 0.45;
+
+    vec2 bevelXY = gradLen > 0.001 ? (smoothGrad / gradLen) : vec2(0.0);
+    vec2 normalXY = bevelXY * (concaveFactor * max(refractionBevelIntensity, 0.35)) + bodyGrad * (fluidBody * bodyGradScale);
+    vec3 glassNormal = normalize(vec3(normalXY, 1.0));
+
+    // Snell's law refraction rays
+    vec3 viewRay = vec3(0.0, 0.0, -1.0);
+    vec3 refractRayG = refract(viewRay, glassNormal, 1.0 / ior);
+    vec2 refractDirG = length(refractRayG.xy) > 0.001 ? normalize(refractRayG.xy) : (gradLen > 0.001 ? bevelXY : vec2(0.0));
+
+    // Lens magnitude and optical displacement in physical pixels
+    float lensMagnitude = concaveFactor * bandWidth * max(refractionBevelIntensity, 0.4) + fluidBody * bandWidth * (0.5 + liq * 0.6);
+    float maxShiftPx = max(minHalfSize * (0.45 + min(liq, 2.0) * 0.35), 24.0 * niri_scale);
+    float shiftPx = min(lensMagnitude * refractionStrength, maxShiftPx);
+
+    // Corner optical weighting
+    vec2 normalizedPos = position / (halfSize * 2.0);
+    float cornerWeight = dot(normalizedPos, normalizedPos) * (refractionOffsetStrength + liq * 0.3);
+    vec2 opticalNormal = bevelXY + normalizedPos * concaveFactor * cornerWeight;
+
+    // Convert shift to UV coordinates using isotropic uvScale:
+    // In position space: +Y is UP. In UV space: +Y is DOWN. Therefore shift.y is inverted.
+    vec2 baseShiftPx = -opticalNormal * (lensMagnitude * 0.3) + refractDirG * shiftPx;
+    vec2 baseShift = vec2(baseShiftPx.x, -baseShiftPx.y) * uvScale;
+
+    // Automatic convex water-droplet magnification (zooms in on wallpaper like looking through a water droplet)
+    if (liq > 0.05) {
+        float dropletZoom = min(liq, 2.0) * 0.32;
+        vec2 dropletMagShiftPx = -toCenter * (1.0 - centerDistSq * 0.5) * (minHalfSize * dropletZoom);
+        baseShift += vec2(dropletMagShiftPx.x, -dropletMagShiftPx.y) * uvScale;
+    }
+
+    // Liquidity-boosted chromatic dispersion
+    float fringing = clamp(refractionRGBFringing, 0.0, 1.0);
+    float effectiveFringing = max(fringing, min(liq * 0.35, 0.6));
+    float dispersionScale = 1.0 + liq * 1.3;
+    vec4 color = vec4(0.0);
+
+    // 3-channel physical Snell chromatic dispersion (Cauchy dispersion)
+    if (effectiveFringing > 0.001 && totalLiquidFactor > 0.005) {
+        float dispAmount = effectiveFringing * 0.22 * dispersionScale;
+        float iorR = max(1.001, ior - dispAmount);
+        float iorB = ior + dispAmount;
+
+        vec3 refractRayR = refract(viewRay, glassNormal, 1.0 / iorR);
+        vec3 refractRayB = refract(viewRay, glassNormal, 1.0 / iorB);
+
+        vec2 dirR = length(refractRayR.xy) > 0.001 ? normalize(refractRayR.xy) : refractDirG;
+        vec2 dirB = length(refractRayB.xy) > 0.001 ? normalize(refractRayB.xy) : refractDirG;
+
+        vec2 shiftPxR = -opticalNormal * (lensMagnitude * 0.3) + dirR * min(lensMagnitude * (refractionStrength * (ior / iorR)), maxShiftPx);
+        vec2 shiftPxB = -opticalNormal * (lensMagnitude * 0.3) + dirB * min(lensMagnitude * (refractionStrength * (ior / iorB)), maxShiftPx);
+
+        vec2 shiftR = vec2(shiftPxR.x, -shiftPxR.y) * uvScale;
+        vec2 shiftB = vec2(shiftPxB.x, -shiftPxB.y) * uvScale;
+
+        // Also add droplet magnification to R and B channels
+        if (liq > 0.05) {
+            float dropletZoom = min(liq, 2.0) * 0.32;
+            vec2 dropletMagShiftPx = -toCenter * (1.0 - centerDistSq * 0.5) * (minHalfSize * dropletZoom);
+            vec2 magUV = vec2(dropletMagShiftPx.x, -dropletMagShiftPx.y) * uvScale;
+            shiftR += magUV;
+            shiftB += magUV;
+        }
+
+        vec2 uvG = clamp(uv_tex + baseShift, uv_min, uv_max);
+        vec2 uvR = clamp(uv_tex + shiftR, uv_min, uv_max);
+        vec2 uvB = clamp(uv_tex + shiftB, uv_min, uv_max);
+
+        color.g = texture2D(tex, uvG).g;
+        color.a = texture2D(tex, uvG).a;
+        color.r = texture2D(tex, uvR).r;
+        color.b = texture2D(tex, uvB).b;
+    } else {
+        vec2 uvSample = clamp(uv_tex + baseShift, uv_min, uv_max);
+        color = texture2D(tex, uvSample);
+    }
+
+    return GlassFragment(color, dist, edgeFactor, totalLiquidFactor, glassNormal, ior);
+}
+
+// Classical 2D Gradient Refraction
+GlassFragment glassRefraction(
+    vec2 uv_tex,
+    vec2 uv_min,
+    vec2 uv_max,
+    vec2 position,
+    vec2 halfBlurSize,
+    vec4 cornerRadius,
+    vec2 uvScale,
+    float dist,
+    float edgeFactor,
+    float concaveFactor,
+    float refractionStrength,
+    float refractionRGBFringing
+) {
+    float minHalfSize = min(halfBlurSize.x, halfBlurSize.y);
+    float bezelWidthPx = max(minHalfSize * lg_edge_thickness, 8.0 * niri_scale);
+    float edgeProximity = exp(dist / bezelWidthPx);
+    float fringingFactor = refractionRGBFringing * 0.35;
+
+    float minR = max(min(min(cornerRadius.x, cornerRadius.y), min(cornerRadius.z, cornerRadius.w)), 2.0);
+    float h = clamp(minR * 0.25, 1.0, 4.0);
+    vec2 gradient = vec2(
+        roundedRectangleDist(position + vec2(h, 0.0), halfBlurSize, cornerRadius) - roundedRectangleDist(position - vec2(h, 0.0), halfBlurSize, cornerRadius),
+        roundedRectangleDist(position + vec2(0.0, h), halfBlurSize, cornerRadius) - roundedRectangleDist(position - vec2(0.0, h), halfBlurSize, cornerRadius)
+    );
+    vec2 normal = length(gradient) > 0.0 ? -normalize(gradient) : vec2(0.0, 1.0);
+    float strength = min(0.4 * concaveFactor * refractionStrength, 1.0);
+    float maxShiftPx = max(minHalfSize * 0.45, 24.0 * niri_scale);
+    vec2 offset = normal * min(strength * (minHalfSize * 0.25), maxShiftPx) * uvScale;
+
+    // Fix Y-axis
+    offset.y = -offset.y;
+
+    vec3 glassNormal = normalize(vec3(normal * concaveFactor, 1.0));
+
+    vec2 coordG = clamp(uv_tex + offset, uv_min, uv_max);
+    vec4 color;
+    if (fringingFactor > 0.001 && concaveFactor > 0.01) {
+        vec2 coordR = clamp(uv_tex + offset * (1.0 + fringingFactor), uv_min, uv_max);
+        vec2 coordB = clamp(uv_tex + offset * (1.0 - fringingFactor), uv_min, uv_max);
+        color = vec4(texture2D(tex, coordR).r, texture2D(tex, coordG).g, texture2D(tex, coordB).b, texture2D(tex, coordG).a);
+    } else {
+        color = texture2D(tex, coordG);
+    }
+
+    return GlassFragment(color, dist, edgeFactor, concaveFactor, glassNormal, 1.0);
+}
+
+// Dilute Refraction
+GlassFragment diluteRefraction(
+    vec2 uv_tex,
+    vec2 uv_min,
+    vec2 uv_max,
+    vec2 position,
+    vec2 halfBlurSize,
+    vec2 uvScale,
+    float dist,
+    float edgeFactor,
+    float concaveFactor,
+    float refractionStrength,
+    float refractionRGBFringing,
+    float intensity
+) {
+    vec2 toCenter = -position;
+    float lenToCenter = length(toCenter);
+    vec2 dirIn = lenToCenter > 0.001 ? toCenter / lenToCenter : vec2(0.0);
+    float minHalfSize = min(halfBlurSize.x, halfBlurSize.y);
+    float maxOffsetPixels = max(minHalfSize * 0.12 * intensity, 16.0 * niri_scale);
+    float magnitudePixels = concaveFactor * clamp(refractionStrength, 0.0, 1.0) * maxOffsetPixels;
+    vec2 offset = dirIn * magnitudePixels * uvScale;
+
+    offset.y = -offset.y;
+    vec2 c0 = clamp(uv_tex + offset * 0.25, uv_min, uv_max);
+    vec2 c1 = clamp(uv_tex + offset * 0.50, uv_min, uv_max);
+    vec2 c2 = clamp(uv_tex + offset * 0.75, uv_min, uv_max);
+    vec2 c3 = clamp(uv_tex + offset * 1.00, uv_min, uv_max);
+    vec4 avg = (texture2D(tex, c0) + texture2D(tex, c1) + texture2D(tex, c2) + texture2D(tex, c3)) * 0.25;
+    vec4 color;
+    if (refractionRGBFringing > 0.001) {
+        float fringe = clamp(refractionRGBFringing, 0.0, 1.0) * 0.3;
+        vec2 coordR = clamp(uv_tex + offset * (1.0 + fringe), uv_min, uv_max);
+        vec2 coordB = clamp(uv_tex + offset * (1.0 - fringe), uv_min, uv_max);
+        color = vec4(texture2D(tex, coordR).r, avg.g, texture2D(tex, coordB).b, avg.a);
+    } else {
+        color = avg;
+    }
+    return GlassFragment(color, dist, edgeFactor, concaveFactor, vec3(0.0, 0.0, 1.0), 1.0);
+}
+
+// Center-directed vector
+vec2 refractionDir(vec2 uv) {
+    vec2 toCenterPx = (vec2(0.5) - uv) * geo_size;
+    float len = length(toCenterPx);
+    return len > 0.1 ? toCenterPx / len : vec2(0.0);
+}
+
+// Center dome barrel lens distortion
+vec2 applyDomeLens(vec2 uv, float lensDistortion, float edgeProximity, vec2 uvScale) {
+    if (lensDistortion < 0.001) {
+        return vec2(0.0, 0.0);
+    }
+
+    vec2 c = (uv - 0.5) * 2.0;
+    vec2 dGrad = vec2(
+        -4.0 * c.x * (1.0 - c.y * c.y),
+        -4.0 * c.y * (1.0 - c.x * c.x)
+    );
+
+    float minDim = min(geo_size.x, geo_size.y);
+    float lensMaxPx = lensDistortion * minDim * 0.06;
+    float lensFade = 1.0 - edgeProximity;
+
+    return dGrad * lensMaxPx * lensFade * uvScale;
+}
+
+// Frosted tint with adaptive luminance
+vec3 applyFrostedTint(vec3 color, float edgeProximity) {
+    // Saturation
+    float lum = dot(color, vec3(0.2126, 0.7152, 0.0722));
+    color = clamp(mix(vec3(lum), color, lg_saturation), 0.0, 1.0);
+
+    // Brightness
+    color *= clamp(lg_brightness, 0.0, 1.0);
+
+    // Adaptive dim (darkens bright areas)
+    if (lg_adaptive_dim > 0.001) {
+        float dimFactor = smoothstep(0.3, 0.8, lum);
+        color *= 1.0 - lg_adaptive_dim * dimFactor;
+    }
+
+    // Adaptive boost (lightens dark areas)
+    if (lg_adaptive_boost > 0.001) {
+        float boostFactor = 1.0 - smoothstep(0.0, 0.5, lum);
+        color += vec3(lg_adaptive_boost * boostFactor * 0.15);
+    }
+
+    color = clamp(color, 0.0, 1.0);
+
+    // Contrast
+    color = clamp(mix(vec3(0.5), color, lg_contrast), 0.0, 1.0);
+
+    // Vibrancy
+    if (lg_vibrancy > 0.001) {
+        float currentLum = dot(color, vec3(0.2126, 0.7152, 0.0722));
+        float sat = max(color.r, max(color.g, color.b)) - min(color.r, min(color.g, color.b));
+        color = clamp(mix(vec3(currentLum), color, 1.0 + lg_vibrancy * sat), 0.0, 1.0);
+    }
+
+    return color;
+}
+
+// Pure Liquid Glass Border:
+// Reflects and refracts the background wallpaper through the curved glass bevel.
+// Completely eliminates artificial white strokes and white paint lines.
+vec3 glassOutline(vec2 position, vec2 blurSize, GlassFragment s, float glowStrength, float edgeLighting, float edgeProximity)
+{
+    vec3 col = s.color.rgb;
+
+    // Fluid Fresnel reflection:
+    // When viewing liquid at grazing angles (along the meniscus curve),
+    // reflectance naturally increases (Schlick's approximation).
+    // Liquidity boosts the Fresnel power for more pronounced liquid sheen.
+    float liq = clamp(lg_liquidity, 0.0, 3.0);
+    float cosTheta = clamp(dot(vec3(0.0, 0.0, 1.0), s.normal), 0.0, 1.0);
+    float fresnelPow = 3.0 + min(liq, 1.0) * 2.0;
+    float fresnel = pow(1.0 - cosTheta, fresnelPow) * s.concaveFactor;
+
+    if (edgeLighting > 0.001) {
+        // Natural chromatic liquid brilliance: concentrates refracted light along the meniscus curve
+        float causticBoost = s.concaveFactor * edgeLighting * 0.35 + fresnel * edgeLighting * 0.25;
+        col = clamp(mix(col, col * (1.0 + causticBoost), 0.85), 0.0, 1.0);
+    }
+
+    // Optional specular rim highlight: ONLY active if explicitly requested via glowStrength > 0.0
+    if (glowStrength > 0.001) {
+        float d = max(-s.dist, 0.0);
+        float rimProfile = smoothstep(0.0, 1.0, d) * (1.0 - smoothstep(1.0, 3.0, d));
+        float topFactor = clamp(s.normal.y * 0.6 + 0.4, 0.0, 1.0);
+        float spec = (rimProfile * topFactor * s.concaveFactor + fresnel * 0.3) * glowStrength;
+        col = clamp(mix(col, vec3(1.0), spec), 0.0, 1.0);
+    }
+
+    return col;
+}
+
+// Main glass effect orchestrator
+vec4 glass_effect(
+    vec2 uv_tex,
+    vec2 windowUV,
+    vec4 baseColor,
+    vec2 blurSize,
+    vec4 cornerRadius,
+    vec2 uvScale,
+    float refractionStrength,
+    float refractionNormalPow,
+    float refractionRGBFringing,
+    float refractionOffsetStrength,
+    float refractionBevelIntensity,
+    float physicallyBasedRefraction,
+    float glowStrength,
+    float edgeLighting
+) {
+    vec2 halfBlurSize = blurSize * 0.5;
+    float minHalfSize = min(halfBlurSize.x, halfBlurSize.y);
+
+    // Pixel coords relative to center with +Y pointing UP
+    vec2 position = windowUV * blurSize - halfBlurSize.xy;
+    position.y = -position.y;
+    float dist = roundedRectangleDist(position, halfBlurSize, cornerRadius);
+
+    // Outside rounded rectangle = no refraction
+    if (dist > 0.0) {
+        return baseColor;
+    }
+
+    vec2 uv_min = vec2(0.0);
+    vec2 uv_max = vec2(1.0);
+
+    // Edge bevel width and curvature — liquidity widens the meniscus band
+    float liq = clamp(lg_liquidity, 0.0, 3.0);
+    float bezelWidthPx = max(minHalfSize * lg_edge_thickness, 10.0 * niri_scale) * (1.0 + liq * 1.5);
+    float minEsp = clamp(bezelWidthPx, 1.0, minHalfSize * 0.95);
+    float edgeFactor = 1.0 - clamp(abs(dist) / minEsp, 0.0, 1.0);
+    float smoothEdge = smoothstep(0.0, 1.0, edgeFactor);
+    // Liquidity softens the concave power for smoother, more organic curvature
+    float liquidPow = refractionNormalPow * max(0.3, 1.0 - liq * 0.35);
+    float concaveFactor = 1.0 - sqrt(max(0.0, 1.0 - pow(smoothEdge, liquidPow)));
+    float edgeProximity = exp(dist / bezelWidthPx);
+
+    GlassFragment s;
+    if (refractionStrength > 0.0) {
+        if (lg_refraction_dilute > 0.0001) {
+            float diluteSt = lg_dilute_strength > 0.0
+                ? clamp(lg_dilute_strength * 0.05, 0.0, 1.0)
+                : clamp(lg_refraction_dilute * 0.15, 0.0, 1.0);
+            float diluteIntensity = max(lg_refraction_dilute, 1.0);
+            s = diluteRefraction(uv_tex, uv_min, uv_max, position, halfBlurSize, uvScale, dist, edgeFactor, concaveFactor, diluteSt, lg_dilute_fringing, diluteIntensity);
+        } else if (physicallyBasedRefraction >= 0.0) {
+            // Default: Snell's Law Optical Refraction (matching kwin-effects-glass / dolphin.png)
+            s = snellsRefraction(
+                uv_tex, uv_min, uv_max, position, halfBlurSize, cornerRadius, uvScale,
+                minHalfSize, dist, edgeFactor, concaveFactor,
+                refractionStrength, refractionBevelIntensity, refractionOffsetStrength, refractionRGBFringing
+            );
+        } else {
+            // Classical 2D gradient push
+            s = glassRefraction(
+                uv_tex, uv_min, uv_max, position, halfBlurSize, cornerRadius, uvScale,
+                dist, edgeFactor, concaveFactor, refractionStrength, refractionRGBFringing
+            );
+        }
+    } else {
+        s = GlassFragment(baseColor, dist, edgeFactor, concaveFactor, vec3(0.0, 0.0, 1.0), 1.0);
+    }
+
+    // Dome lens distortion
+    vec2 domeUV = applyDomeLens(uv_tex, lg_lens_distortion, edgeProximity, uvScale);
+    if (length(domeUV) > 0.001) {
+        vec2 maxOffPos = vec2(1.0) - uv_tex;
+        vec2 maxOffNeg = uv_tex;
+        domeUV = clamp(domeUV, -maxOffNeg, maxOffPos);
+        s.color = texture2D(tex, uv_tex + domeUV);
+    }
+
+    // Frosted tint & adaptive luminance
+    s.color.rgb = applyFrostedTint(s.color.rgb, edgeProximity);
+
+    // Apply smooth glass outline & specular lighting
+    vec3 rgb = glassOutline(position, blurSize, s, glowStrength, edgeLighting, edgeProximity);
+
+    return vec4(rgb, s.color.a);
+}
 
 void main() {
     vec3 coords_geo = input_to_geo * vec3(v_coords, 1.0);
 
-    // Sample the texture.
     vec4 color = texture2D(tex, v_coords);
 #if defined(NO_ALPHA)
     color = vec4(color.rgb, 1.0);
 #endif
 
-    color = postprocess(color);
-
-    if (coords_geo.x < 0.0 || 1.0 < coords_geo.x || coords_geo.y < 0.0 || 1.0 < coords_geo.y) {
-        // Clip outside geometry.
-        color = vec4(0.0);
-    } else {
-        // Apply corner rounding inside geometry.
-        color = color * niri_rounding_alpha(coords_geo.xy * geo_size, geo_size, corner_radius);
+    // Clip fragments outside geometry bounds completely
+    if (coords_geo.x < 0.0 || coords_geo.x > 1.0 || coords_geo.y < 0.0 || coords_geo.y > 1.0) {
+        gl_FragColor = vec4(0.0);
+        return;
     }
 
-    // Apply final alpha and tint.
-    color = color * alpha;
+    // Determine actual unpadded window size and pixel coordinates
+    vec2 winSize = geo_size;
+    vec2 winPixel = coords_geo.xy * geo_size;
+    if (lg_padding_pixels > 0.5) {
+        winSize = geo_size - vec2(lg_padding_pixels * 2.0);
+        winPixel = coords_geo.xy * geo_size - vec2(lg_padding_pixels);
+    }
+    vec2 windowUV = winPixel / winSize;
+
+    // Centered pixel coordinates for SDF (+Y is UP, -Y is DOWN)
+    vec2 halfWinSize = winSize * 0.5;
+    vec2 position = winPixel - halfWinSize;
+    position.y = -position.y;
+
+    // Signed distance to window boundary (dist <= 0 is inside, dist > 0 is outside)
+    float dist = roundedRectangleDist(position, halfWinSize, corner_radius);
+
+    // Subpixel-smooth anti-aliased edge coverage across 1.5 physical pixels
+    // Wider transition band eliminates jagged edges and colored line glitches
+    float aaWidth = 1.5 * niri_scale;
+    float edgeAlpha = clamp(0.5 - dist / aaWidth, 0.0, 1.0);
+    edgeAlpha = edgeAlpha * edgeAlpha * (3.0 - 2.0 * edgeAlpha);
+
+    if (edgeAlpha <= 0.0) {
+        gl_FragColor = vec4(0.0);
+        return;
+    }
+
+    float lgEnabled = step(0.0001, lg_refraction_strength);
+    if (lgEnabled > 0.0) {
+        // Compute exact physical texture pixel density from input_to_geo matrix.
+        // In Xray mode: input_to_geo transforms screen UV [0,1] to geometry UV [0,1].
+        // In Framebuffer mode: input_to_geo transforms cropped buffer UV to geometry UV.
+        // uvScale = 1.0 / texPixels yields exact isotropic 1:1 physical pixel shift,
+        // preventing any stretching distortion regardless of window/bar aspect ratio.
+        vec2 dU = vec2(input_to_geo[0][0], input_to_geo[0][1]);
+        vec2 dV = vec2(input_to_geo[1][0], input_to_geo[1][1]);
+        vec2 texPixels = max(vec2(length(dU) * winSize.x, length(dV) * winSize.y), vec2(1.0));
+        vec2 uvScale = 1.0 / texPixels;
+
+        vec4 result;
+        if (lg_mode > 0.5) {
+            // Authentic KWin Glass Shader Pipeline
+            result = kwin_glass_effect(
+                v_coords,       // uv_tex
+                windowUV,       // window UV [0, 1]
+                color,
+                winSize,        // actual unpadded window size
+                lg_corner_radius, // client contour for optical geometry
+                uvScale,        // isotropic physical pixel-to-UV scale
+                lg_refraction_strength,
+                lg_power_factor,
+                lg_fringing,
+                lg_offset_strength,
+                lg_bevel_intensity,
+                lg_glow_weight,
+                lg_edge_lighting
+            );
+        } else {
+            // Dynamic liquidity-aware strength normalization:
+            // At liq = 0.0: standard normalized 0.05 scaling (preserves existing configs).
+            // At liq = 1.0: unlocks deep optical refraction (0.22 scale) matching liquid_enough.png water droplet.
+            // At liq > 1.0: allows extreme fluid distortion scaling up to 3.0.
+            float liq = clamp(lg_liquidity, 0.0, 3.0);
+            float baseNormStrength = clamp(lg_refraction_strength * 0.05, 0.0, 1.0);
+            float normStrength = mix(baseNormStrength, clamp(lg_refraction_strength * 0.22, 0.1, 2.5), min(liq, 1.0));
+            if (liq > 1.0) {
+                normStrength *= (1.0 + (liq - 1.0) * 0.6);
+            }
+
+            result = glass_effect(
+                v_coords,       // uv_tex
+                windowUV,       // window UV [0, 1]
+                color,
+                winSize,        // actual unpadded window size
+                lg_corner_radius, // client contour for optical geometry
+                uvScale,        // isotropic physical pixel-to-UV scale
+                normStrength,
+                lg_power_factor,
+                lg_fringing,
+                lg_refraction_power,
+                lg_refraction_power,
+                lg_physical_refraction,
+                lg_glow_weight,
+                lg_edge_lighting
+            );
+        }
+        color = result;
+    } else {
+        // Fallback when liquid-glass is disabled: apply standard niri corner rounding
+        edgeAlpha = niri_rounding_alpha(coords_geo.xy * geo_size, geo_size, corner_radius);
+    }
+
+    color = postprocess(color);
+
+    // Apply smooth anti-aliased boundary coverage and surface alpha
+    color = color * edgeAlpha * alpha;
 
 #if defined(DEBUG_FLAGS)
     if (tint == 1.0)

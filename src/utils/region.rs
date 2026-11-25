@@ -91,6 +91,66 @@ impl TransformedRegion {
     }
 }
 
+/// Recover optical corner radii from a client's rounded, scan-converted region.
+/// Coverage still comes from the region; this estimate only shapes glass optics.
+pub fn rounded_region_radii(
+    region: &TransformedRegion,
+    bounds: Rectangle<f64, Logical>,
+) -> niri_config::CornerRadius {
+    let mut rects: Vec<_> = region.iter().collect();
+    rects.sort_by(|(a, _), (b, _)| a.y.total_cmp(&b.y));
+    if rects.windows(2).any(|pair| pair[0].1.y > pair[1].0.y) {
+        return niri_config::CornerRadius::default();
+    }
+    let middle_y = bounds.loc.y + bounds.size.h * 0.5;
+    let right = bounds.loc.x + bounds.size.w;
+    let bottom = bounds.loc.y + bounds.size.h;
+    let full_middle = rects
+        .iter()
+        .any(|(a, b)| a.y <= middle_y && middle_y < b.y && a.x <= bounds.loc.x && b.x >= right);
+    if !full_middle {
+        return niri_config::CornerRadius::default();
+    }
+    let mut samples: [Vec<f64>; 4] = Default::default();
+    let step = region.scale.y.abs();
+    for (a, b) in &rects {
+        for (index, x, y) in [
+            (0, a.x - bounds.loc.x, a.y - bounds.loc.y + step * 0.5),
+            (1, right - b.x, a.y - bounds.loc.y + step * 0.5),
+            (2, right - b.x, bottom - b.y + step * 0.5),
+            (3, a.x - bounds.loc.x, bottom - b.y + step * 0.5),
+        ] {
+            if x <= step * 2. || y > bounds.size.h * 0.5 || x > bounds.size.w * 0.5 {
+                continue;
+            }
+            // Circle centred at (r,r): (x-r)^2 + (y-r)^2 = r^2.
+            let r = x + y + (2. * x * y).sqrt();
+            if r <= bounds.size.w.min(bounds.size.h) * 0.5 + step {
+                samples[index].push(r);
+            }
+        }
+    }
+    let radii = samples.map(|mut values| {
+        if values.len() < 2 {
+            return 0.;
+        }
+        values.sort_by(f64::total_cmp);
+        let median = values[values.len() / 2];
+        // Irregular/notched regions should retain their existing optics.
+        if values.iter().any(|r| (r - median).abs() > step * 3.) {
+            return 0.;
+        }
+        median as f32
+    });
+    niri_config::CornerRadius {
+        top_left: radii[0],
+        top_right: radii[1],
+        bottom_right: radii[2],
+        bottom_left: radii[3],
+    }
+    .fit_to(bounds.size.w as f32, bounds.size.h as f32)
+}
+
 pub fn region_to_non_overlapping_rects(
     region: &RegionAttributes,
     output: &mut Vec<Rectangle<i32, Logical>>,
@@ -204,6 +264,74 @@ mod tests {
     use smithay::wayland::compositor::{RectangleKind, RegionAttributes};
 
     use super::region_to_non_overlapping_rects;
+
+    #[test]
+    fn rounded_region_preserves_asymmetric_scaled_corners() {
+        let radii = [12., 18., 8., 24.];
+        let inset = |y: f64, r: f64| {
+            if y >= r {
+                0
+            } else {
+                (r - (r * r - (r - y).powi(2)).sqrt()).ceil() as i32
+            }
+        };
+        let rects = (0..160)
+            .map(|y| {
+                let left =
+                    inset(y as f64 + 0.5, radii[0]).max(inset(160. - y as f64 - 0.5, radii[3]));
+                let right =
+                    inset(y as f64 + 0.5, radii[1]).max(inset(160. - y as f64 - 0.5, radii[2]));
+                Rectangle::new((left, y).into(), (240 - left - right, 1).into())
+            })
+            .collect();
+        let region = super::TransformedRegion {
+            rects: std::sync::Arc::new(rects),
+            scale: 1.5.into(),
+            offset: (-10., 30.).into(),
+        };
+        let actual = super::rounded_region_radii(
+            &region,
+            Rectangle::new((-10., 30.).into(), (360., 240.).into()),
+        );
+        for (actual, expected) in [
+            actual.top_left,
+            actual.top_right,
+            actual.bottom_right,
+            actual.bottom_left,
+        ]
+        .into_iter()
+        .zip(radii)
+        {
+            assert!(
+                (actual as f64 - expected * 1.5).abs() < 3.,
+                "{actual} vs {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn rounded_region_leaves_rectangular_and_disconnected_masks_square() {
+        for rects in [
+            vec![Rectangle::new((0, 0).into(), (100, 100).into())],
+            vec![
+                Rectangle::new((0, 0).into(), (40, 100).into()),
+                Rectangle::new((60, 0).into(), (40, 100).into()),
+            ],
+        ] {
+            let region = super::TransformedRegion {
+                rects: std::sync::Arc::new(rects),
+                scale: 1.0.into(),
+                offset: (0., 0.).into(),
+            };
+            assert_eq!(
+                super::rounded_region_radii(
+                    &region,
+                    Rectangle::new((0., 0.).into(), (100., 100.).into())
+                ),
+                niri_config::CornerRadius::default()
+            );
+        }
+    }
 
     #[allow(clippy::type_complexity)]
     fn check(rects: &[(RectangleKind, (i32, i32, i32, i32))]) -> String {

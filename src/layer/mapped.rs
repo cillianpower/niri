@@ -1,5 +1,5 @@
 use niri_config::utils::MergeWith as _;
-use niri_config::{Config, LayerRule};
+use niri_config::{Color, Config, CornerRadius, GradientInterpolation, LayerRule};
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::element::Kind;
 use smithay::desktop::{LayerSurface, PopupKind, PopupManager};
@@ -12,6 +12,8 @@ use crate::animation::Clock;
 use crate::layout::shadow::Shadow;
 use crate::niri_render_elements;
 use crate::render_helpers::background_effect::BackgroundEffectElement;
+use crate::render_helpers::border::BorderRenderElement;
+use crate::render_helpers::clipped_surface::ClippedSurfaceRenderElement;
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::shadow::ShadowRenderElement;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
@@ -61,6 +63,8 @@ niri_render_elements! {
         SolidColor = SolidColorRenderElement,
         Shadow = ShadowRenderElement,
         BackgroundEffect = BackgroundEffectElement,
+        ClippedSurface = ClippedSurfaceRenderElement<R>,
+        Border = BorderRenderElement,
     }
 }
 
@@ -200,21 +204,56 @@ impl MappedLayer {
         let xray_pos = xray_pos.offset(bob_offset);
 
         let surface = self.surface.wl_surface();
+        let rounded_location = location.to_physical_precise_round(scale).to_logical(scale);
+        let geometry = Rectangle::new(rounded_location, self.block_out_buffer.size());
+        let raw_radius = self.rules.geometry_corner_radius.unwrap_or_default();
+        let radius = raw_radius.fit_to(geometry.size.w as f32, geometry.size.h as f32);
+        let clip_to_geometry = radius != CornerRadius::default();
 
         let should_block_out = ctx.target.should_block_out(self.rules.block_out_from);
         if should_block_out {
-            // Round to physical pixels.
-            let location = location.to_physical_precise_round(scale).to_logical(scale);
-
-            // FIXME: take geometry-corner-radius into account.
-            let elem = SolidColorRenderElement::from_buffer(
-                &self.block_out_buffer,
-                location,
-                alpha,
-                Kind::Unspecified,
-            );
-            push(elem.into());
+            let has_border_shader = BorderRenderElement::has_shader(ctx.renderer);
+            if radius != CornerRadius::default() && has_border_shader {
+                let elem = BorderRenderElement::new(
+                    geometry.size,
+                    Rectangle::from_size(geometry.size),
+                    GradientInterpolation::default(),
+                    Color::from_color32f(self.block_out_buffer.color()),
+                    Color::from_color32f(self.block_out_buffer.color()),
+                    0.,
+                    Rectangle::from_size(geometry.size),
+                    0.,
+                    radius,
+                    self.scale as f32,
+                    alpha,
+                )
+                .with_location(geometry.loc);
+                push(elem.into());
+            } else {
+                let elem = SolidColorRenderElement::from_buffer(
+                    &self.block_out_buffer,
+                    rounded_location,
+                    alpha,
+                    Kind::Unspecified,
+                );
+                push(elem.into());
+            }
         } else {
+            let clip_shader = ClippedSurfaceRenderElement::shader(ctx.renderer).cloned();
+            let clip = |elem: WaylandSurfaceRenderElement<R>| {
+                if clip_to_geometry {
+                    if let Some(shader) = clip_shader.clone() {
+                        if ClippedSurfaceRenderElement::will_clip(&elem, scale, geometry, radius) {
+                            return ClippedSurfaceRenderElement::new(
+                                elem, scale, geometry, shader, radius,
+                            )
+                            .into();
+                        }
+                    }
+                }
+                LayerSurfaceRenderElement::Wayland(elem)
+            };
+
             // Layer surfaces don't have extra geometry like windows.
             let buf_pos = location;
 
@@ -225,24 +264,23 @@ impl MappedLayer {
                 scale,
                 alpha,
                 Kind::ScanoutCandidate,
-                &mut |elem| push(elem.into()),
+                &mut |elem| push(clip(elem)),
             );
         }
 
-        let location = location.to_physical_precise_round(scale).to_logical(scale);
         self.shadow
-            .render(ctx.renderer, location, &mut |elem| push(elem.into()));
+            .render(ctx.renderer, rounded_location, &mut |elem| {
+                push(elem.into())
+            });
 
-        let geometry = Rectangle::new(location, self.block_out_buffer.size());
         let surface_off = Point::new(0., 0.); // No geometry on layer surfaces.
         let surface_anim_scale = Scale::from(1.);
-        let radius = self.rules.geometry_corner_radius.unwrap_or_default();
         background_effect::render_for_tile(
             ctx.as_gles(),
             ns,
             geometry,
             self.scale,
-            false,
+            true, // clip_to_geometry: true so effect matches layer geometry and corner radius!
             surface,
             surface_off,
             surface_anim_scale,
@@ -250,6 +288,7 @@ impl MappedLayer {
             radius,
             self.rules.background_effect,
             should_block_out,
+            self.rules.background_effect.liquid_glass.is_some(),
             xray_pos,
             &mut |elem| push(elem.into()),
         );
@@ -286,6 +325,33 @@ impl MappedLayer {
             let surface = popup.wl_surface();
             let popup_geo = popup.geometry();
             let surface_loc = location + (offset - popup_geo.loc).to_f64();
+            let geometry = Rectangle::new(location + offset.to_f64(), popup_geo.size.to_f64());
+            let popup_radius = popup_rules.geometry_corner_radius.unwrap_or_default();
+            let popup_radius = popup_radius.fit_to(geometry.size.w as f32, geometry.size.h as f32);
+            let clip_to_geometry = popup_radius != CornerRadius::default();
+            let clip_shader = ClippedSurfaceRenderElement::shader(ctx.renderer).cloned();
+            let clip = |elem: WaylandSurfaceRenderElement<R>| {
+                if clip_to_geometry {
+                    if let Some(shader) = clip_shader.clone() {
+                        if ClippedSurfaceRenderElement::will_clip(
+                            &elem,
+                            scale,
+                            geometry,
+                            popup_radius,
+                        ) {
+                            return ClippedSurfaceRenderElement::new(
+                                elem,
+                                scale,
+                                geometry,
+                                shader,
+                                popup_radius,
+                            )
+                            .into();
+                        }
+                    }
+                }
+                LayerSurfaceRenderElement::Wayland(elem)
+            };
 
             push_elements_from_surface_tree(
                 ctx.renderer,
@@ -294,10 +360,9 @@ impl MappedLayer {
                 scale,
                 alpha,
                 Kind::ScanoutCandidate,
-                &mut |elem| push(elem.into()),
+                &mut |elem| push(clip(elem)),
             );
 
-            let geometry = Rectangle::new(location + offset.to_f64(), popup_geo.size.to_f64());
             let surface_off = popup_geo.loc.upscale(-1).to_f64();
             let surface_anim_scale = Scale::from(1.);
             let mut effect = popup_rules.background_effect;
@@ -311,13 +376,14 @@ impl MappedLayer {
                 ns,
                 geometry,
                 self.scale,
-                false,
+                true,
                 surface,
                 surface_off,
                 surface_anim_scale,
                 self.blur_config,
-                popup_rules.geometry_corner_radius.unwrap_or_default(),
+                popup_radius,
                 effect,
+                false,
                 false,
                 xray_pos,
                 &mut |elem| push(elem.into()),
